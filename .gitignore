@@ -15,3 +15,7 @@ samples/
 .DS_Store
 .idea/
 .vscode/
+
+# Dependencies
+vendor/
+

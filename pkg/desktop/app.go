@@ -3,6 +3,8 @@ package desktop
 import (
 	"context"
 	"fmt"
+	"image"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,7 +35,9 @@ type DesktopApp struct {
 	queryDimensions string
 	queryFormat     string
 	queryFileSize   int64
+	queryImgRaw     image.Image
 	queryImgThumb   ui.ImageSource
+	lastBrowsedDir  string
 
 	searchDir       string
 	searchMetric    string
@@ -123,6 +127,11 @@ func Launch() error {
 			BackgroundColor: "#0f1117",
 			Content:         ui.View(appState.view),
 		})
+		appState.win.OnFileDrop(func(e *mygo.FileDropEvent) {
+			if len(e.Paths) > 0 {
+				appState.handleFileDrop(e.Paths[0])
+			}
+		})
 		appState.refreshCacheStats()
 	})
 
@@ -134,13 +143,13 @@ func (a *DesktopApp) getTheme() *ui.Theme {
 	if a.themeChoice == "light" {
 		t := ui.LightTheme()
 		t.Dark = false
-		t.Background = ui.Hex("#f8fafc")
+		t.Background = ui.Hex("#eef2f6")
 		t.Surface = ui.Hex("#ffffff")
 		t.SurfaceHover = ui.Hex("#f1f5f9")
 		t.SurfacePressed = ui.Hex("#e2e8f0")
-		t.Border = ui.Hex("#cbd5e1")
+		t.Border = ui.Hex("#94a3b8")
 		t.Text = ui.Hex("#0f172a")      // Deep slate black
-		t.TextMuted = ui.Hex("#475569") // Crisp readable gray
+		t.TextMuted = ui.Hex("#334155") // High-contrast slate
 		t.Accent = ui.Hex("#2563eb")
 		t.AccentHover = ui.Hex("#1d4ed8")
 		t.AccentPressed = ui.Hex("#1e40af")
@@ -251,7 +260,7 @@ func (a *DesktopApp) view(c *ui.Context) {
 					}
 					if a.win != nil {
 						if a.themeChoice == "light" {
-							_ = a.win.SetBackgroundColor("#f8fafc")
+							_ = a.win.SetBackgroundColor("#eef2f6")
 						} else {
 							_ = a.win.SetBackgroundColor("#0f1117")
 						}
@@ -298,9 +307,28 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 		// Top 2-Card Row: Query Image Preview Card & Target Directory Card
 		ui.Row(c).Fill().Gap(14).Children(func() {
 			// Query Image Card
-			ui.Column(c).Grow(1).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
+			queryCard := ui.Column(c).Grow(1).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8)
+			if dropped := queryCard.DroppedFiles(); len(dropped) > 0 {
+				a.setQueryImage(dropped[0])
+			}
+			queryDragging := queryCard.FileDragOver()
+			if queryDragging {
+				var dragBg ui.Color
+				if t.Dark {
+					dragBg = ui.Hex("#1e293b")
+				} else {
+					dragBg = ui.Hex("#eff6ff")
+				}
+				queryCard.Border(2, t.Accent).Background(dragBg)
+			}
+			queryCard.Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-					ui.Text(c, "REFERENCE QUERY IMAGE").FontSize(11).Bold().TextColor(t.Accent)
+					ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+						ui.Text(c, "REFERENCE QUERY IMAGE").FontSize(11).Bold().TextColor(t.Accent)
+						if queryDragging {
+							ui.Text(c, "• Drop Image Here!").FontSize(11).Bold().TextColor(t.Accent)
+						}
+					})
 					browseBtn := ui.Button(c, "Browse Image...")
 					if browseBtn.Clicked() {
 						go a.pickQueryImage()
@@ -317,7 +345,13 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 							})
 						}
 						ui.Column(c).Grow(1).Gap(3).Children(func() {
-							ui.Text(c, filepath.Base(a.queryPath)).Bold().FontSize(13).TextColor(t.Text)
+							ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+								ui.Text(c, filepath.Base(a.queryPath)).Bold().FontSize(13).TextColor(t.Text)
+								changeBtn := ui.Button(c, "Change").Height(22)
+								if changeBtn.Clicked() {
+									go a.pickQueryImage()
+								}
+							})
 							ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 								if a.queryDimensions != "" {
 									ui.Text(c, a.queryDimensions).FontSize(11).TextColor(t.TextMuted)
@@ -331,43 +365,90 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 									ui.Text(c, formatBytes(a.queryFileSize)).FontSize(11).TextColor(t.TextMuted)
 								}
 							})
-							ui.Text(c, a.queryPath).FontSize(10).TextColor(t.TextMuted)
+							ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+								ui.Text(c, a.queryPath).FontSize(10).TextColor(t.TextMuted)
+								ui.Text(c, "(Drop image here to replace)").FontSize(10).TextColor(t.Accent)
+							})
 						})
 					})
 				} else {
-					pickBtn := ui.Button(c, "📁 Click to select reference Query Image...").Height(72)
-					if pickBtn.Clicked() {
-						go a.pickQueryImage()
+					pickDropBox := ui.Column(c).Height(72).Radius(6).Background(t.Background).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.Center).Gap(4)
+					if queryDragging {
+						pickDropBox.Border(2, t.Accent)
 					}
+					pickDropBox.Children(func() {
+						ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+							ui.Text(c, "📥").FontSize(20)
+							ui.Text(c, "Drag & Drop Image Here, or click Browse Image...").Bold().FontSize(12).TextColor(t.Text)
+						})
+						ui.Text(c, "Supports JPG, PNG, WebP, GIF, BMP, TIFF").FontSize(11).TextColor(t.TextMuted)
+					})
 				}
 			})
 
 			// Search Target Directory Card
-			ui.Column(c).Grow(1).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
+			dirCard := ui.Column(c).Grow(1).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8)
+			if dropped := dirCard.DroppedFiles(); len(dropped) > 0 {
+				a.setSearchDir(dropped[0])
+			}
+			dirDragging := dirCard.FileDragOver()
+			if dirDragging {
+				var dragBg ui.Color
+				if t.Dark {
+					dragBg = ui.Hex("#052e16")
+				} else {
+					dragBg = ui.Hex("#f0fdf4")
+				}
+				dirCard.Border(2, ui.Hex("#16a34a")).Background(dragBg)
+			}
+			dirCard.Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-					ui.Text(c, "SEARCH TARGET DIRECTORY").FontSize(11).Bold().TextColor(ui.Hex("#16a34a"))
+					ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+						ui.Text(c, "SEARCH TARGET DIRECTORY").FontSize(11).Bold().TextColor(ui.Hex("#16a34a"))
+						if dirDragging {
+							ui.Text(c, "• Drop Folder Here!").FontSize(11).Bold().TextColor(ui.Hex("#16a34a"))
+						}
+					})
 					chooseBtn := ui.Button(c, "Choose Folder...")
 					if chooseBtn.Clicked() {
 						go a.pickSearchDir()
 					}
 				})
 
-				if a.searchDir != "" {
-					ui.Row(c).Gap(12).AlignItems(ui.Center).Padding(8).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
-						ui.Row(c).Size(72, 72).Radius(4).Background(t.SurfaceHover).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-							ui.Text(c, "📂").FontSize(28)
-						})
-						ui.Column(c).Grow(1).Gap(3).Children(func() {
-							ui.Text(c, filepath.Base(a.searchDir)).Bold().FontSize(13).TextColor(t.Text)
-							ui.Text(c, a.searchDir).FontSize(10).TextColor(t.TextMuted)
-						})
+				ui.Column(c).Height(72).Justify(ui.SpaceBetween).Children(func() {
+					// Key-in text input
+					ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+						ui.TextInput(c, &a.searchDir).Placeholder("Type or paste directory path (e.g. /home/user/Pictures or ~/Pictures)...").Grow(1)
 					})
-				} else {
-					folderBtn := ui.Button(c, "📂 Click to choose directory of Candidate Images...").Height(72)
-					if folderBtn.Clicked() {
-						go a.pickSearchDir()
+
+					// Directory validation indicator & drop hint
+					dirTrim := strings.TrimSpace(a.searchDir)
+					if dirTrim == "" {
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, "💡 Key in path above, click Choose Folder, or drag & drop folder here").FontSize(11).TextColor(t.TextMuted)
+						})
+					} else {
+						resolved := expandPath(dirTrim)
+						st, err := os.Stat(resolved)
+						if err == nil && st.IsDir() {
+							ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, "✓").Bold().FontSize(12).TextColor(ui.Hex("#16a34a"))
+								ui.Text(c, "Ready:").Bold().FontSize(11).TextColor(ui.Hex("#16a34a"))
+								ui.Text(c, resolved).FontSize(11).TextColor(t.Text)
+							})
+						} else if err == nil && !st.IsDir() {
+							ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, "⚠️").FontSize(12)
+								ui.Text(c, "Path is a file, not a directory").FontSize(11).TextColor(ui.Hex("#ea580c"))
+							})
+						} else {
+							ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, "⚠️").FontSize(12)
+								ui.Text(c, "Directory not found: "+resolved).FontSize(11).TextColor(ui.Hex("#ef4444"))
+							})
+						}
 					}
-				}
+				})
 			})
 		})
 
@@ -600,25 +681,59 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		// Target Directory Selector Card
-		ui.Column(c).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12).Children(func() {
+		clusterCard := ui.Column(c).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12)
+		if dropped := clusterCard.DroppedFiles(); len(dropped) > 0 {
+			a.setClusterDir(dropped[0])
+		}
+		clusterDragging := clusterCard.FileDragOver()
+		if clusterDragging {
+			var dragBg ui.Color
+			if t.Dark {
+				dragBg = ui.Hex("#052e16")
+			} else {
+				dragBg = ui.Hex("#f0fdf4")
+			}
+			clusterCard.Border(2, ui.Hex("#16a34a")).Background(dragBg)
+		}
+		clusterCard.Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 				ui.Column(c).Gap(2).Children(func() {
-					ui.Text(c, "Duplicate Clusters Deduplication").FontSize(15).Bold().TextColor(t.Text)
+					ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+						ui.Text(c, "Duplicate Clusters Deduplication").FontSize(15).Bold().TextColor(t.Text)
+						if clusterDragging {
+							ui.Text(c, "• Drop Folder Here!").FontSize(12).Bold().TextColor(ui.Hex("#16a34a"))
+						}
+					})
 					ui.Text(c, "Identify all groups of visually identical and near-duplicate images within a directory.").FontSize(11).TextColor(t.TextMuted)
 				})
-				if ui.Button(c, "Select Target Directory...").Clicked() {
+				if ui.Button(c, "Choose Directory...").Clicked() {
 					go a.pickClusterDir()
 				}
 			})
 
-			if a.clusterDir != "" {
-				ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(8).Radius(6).Background(t.Background).Border(1, t.Border).Children(func() {
-					ui.Text(c, "📂").FontSize(20)
-					ui.Text(c, a.clusterDir).FontSize(11).TextColor(t.Text).Grow(1)
+			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.TextInput(c, &a.clusterDir).Placeholder("Type or paste target directory path (e.g. /home/user/Pictures or ~/Pictures)...").Grow(1)
+			})
+
+			dirTrim := strings.TrimSpace(a.clusterDir)
+			if dirTrim == "" {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "💡 Key in directory path above, click Choose Directory, or drag & drop folder here").FontSize(11).TextColor(t.TextMuted)
 				})
 			} else {
-				if ui.Button(c, "📂 Click to choose target directory to scan for duplicate clusters...").Height(50).Clicked() {
-					go a.pickClusterDir()
+				resolved := expandPath(dirTrim)
+				st, err := os.Stat(resolved)
+				if err == nil && st.IsDir() {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "✓").Bold().FontSize(12).TextColor(ui.Hex("#16a34a"))
+						ui.Text(c, "Ready:").Bold().FontSize(11).TextColor(ui.Hex("#16a34a"))
+						ui.Text(c, resolved).FontSize(11).TextColor(t.Text)
+					})
+				} else {
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, "⚠️").FontSize(12)
+						ui.Text(c, "Directory not found: "+resolved).FontSize(11).TextColor(ui.Hex("#ef4444"))
+					})
 				}
 			}
 
@@ -807,67 +922,183 @@ func (a *DesktopApp) viewCacheTab(c *ui.Context) {
 
 // Background operations & dialog triggers
 
+func expandPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				return home
+			}
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
+func (a *DesktopApp) setQueryImage(p string) {
+	p = expandPath(p)
+	if p == "" {
+		return
+	}
+	st, err := os.Stat(p)
+	if err != nil || st.IsDir() {
+		return
+	}
+	img, meta, err := search.OpenImage(p)
+	if err != nil {
+		return
+	}
+	thumbImg := search.CreateThumbnail(img, 240)
+	thumb := ui.NewBitmap(thumbImg)
+	a.lastBrowsedDir = filepath.Dir(p)
+
+	updateFn := func() {
+		a.queryPath = p
+		a.queryDimensions = fmt.Sprintf("%d × %d", meta.Width, meta.Height)
+		a.queryFormat = meta.Format
+		a.queryFileSize = meta.FileSize
+		a.queryImgRaw = thumbImg
+		a.queryImgThumb = thumb
+	}
+	if a.win != nil {
+		a.win.Update(updateFn)
+	} else {
+		updateFn()
+	}
+}
+
+func (a *DesktopApp) setSearchDir(p string) {
+	p = expandPath(p)
+	if p == "" {
+		return
+	}
+	st, err := os.Stat(p)
+	if err == nil && !st.IsDir() {
+		p = filepath.Dir(p)
+	}
+	a.lastBrowsedDir = p
+	updateFn := func() {
+		a.searchDir = p
+	}
+	if a.win != nil {
+		a.win.Update(updateFn)
+	} else {
+		updateFn()
+	}
+}
+
+func (a *DesktopApp) setClusterDir(p string) {
+	p = expandPath(p)
+	if p == "" {
+		return
+	}
+	st, err := os.Stat(p)
+	if err == nil && !st.IsDir() {
+		p = filepath.Dir(p)
+	}
+	a.lastBrowsedDir = p
+	updateFn := func() {
+		a.clusterDir = p
+	}
+	if a.win != nil {
+		a.win.Update(updateFn)
+	} else {
+		updateFn()
+	}
+}
+
+func (a *DesktopApp) handleFileDrop(p string) {
+	p = expandPath(p)
+	st, err := os.Stat(p)
+	if err != nil {
+		return
+	}
+	if st.IsDir() {
+		if a.activeTab == 2 {
+			a.setClusterDir(p)
+		} else {
+			a.setSearchDir(p)
+		}
+	} else {
+		a.setQueryImage(p)
+	}
+}
+
 func (a *DesktopApp) pickQueryImage() {
+	defPath := a.queryPath
+	if defPath == "" {
+		defPath = a.searchDir
+	}
+	if defPath == "" {
+		defPath = a.lastBrowsedDir
+	}
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title: "Choose Reference Query Image",
+		Title:       "Select Reference Query Image",
+		DefaultPath: defPath,
 		Filters: []mygo.FileFilter{
-			{Name: "Images", Extensions: []string{"jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"}},
+			{Name: "Image files", Extensions: []string{"jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"}},
 		},
 	})
 	if err == nil && len(paths) > 0 {
-		p := paths[0]
-		img, meta, err := search.OpenImage(p)
-		var thumb ui.ImageSource
-		if err == nil {
-			thumbImg := search.CreateThumbnail(img, 240)
-			thumb = ui.NewBitmap(thumbImg)
-		}
-		if a.win != nil {
-			a.win.Update(func() {
-				a.queryPath = p
-				a.queryDimensions = fmt.Sprintf("%d × %d", meta.Width, meta.Height)
-				a.queryFormat = meta.Format
-				a.queryFileSize = meta.FileSize
-				a.queryImgThumb = thumb
-			})
-		}
+		a.setQueryImage(paths[0])
 	}
 }
 
 func (a *DesktopApp) pickSearchDir() {
+	defPath := a.searchDir
+	if defPath == "" {
+		if a.queryPath != "" {
+			defPath = filepath.Dir(a.queryPath)
+		} else {
+			defPath = a.lastBrowsedDir
+		}
+	}
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:     "Choose Candidate Images Directory",
-		Directory: true,
+		Title:       "Choose Candidate Images Directory",
+		Directory:   true,
+		DefaultPath: defPath,
 	})
 	if err == nil && len(paths) > 0 {
-		if a.win != nil {
-			a.win.Update(func() {
-				a.searchDir = paths[0]
-			})
-		}
+		a.setSearchDir(paths[0])
 	}
 }
 
 func (a *DesktopApp) pickClusterDir() {
+	defPath := a.clusterDir
+	if defPath == "" {
+		defPath = a.searchDir
+	}
+	if defPath == "" {
+		defPath = a.lastBrowsedDir
+	}
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:     "Choose Target Directory to Deduplicate",
-		Directory: true,
+		Title:       "Choose Target Directory to Deduplicate",
+		Directory:   true,
+		DefaultPath: defPath,
 	})
 	if err == nil && len(paths) > 0 {
-		if a.win != nil {
-			a.win.Update(func() {
-				a.clusterDir = paths[0]
-			})
-		}
+		a.setClusterDir(paths[0])
 	}
 }
 
 func (a *DesktopApp) pickPreindexDir() {
+	defPath := a.cacheDirInput
+	if defPath == "" {
+		defPath = a.searchDir
+	}
+	if defPath == "" {
+		defPath = a.lastBrowsedDir
+	}
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Title:     "Choose Directory for Cache Pre-indexing",
-		Directory: true,
+		Title:       "Choose Directory for Cache Pre-indexing",
+		Directory:   true,
+		DefaultPath: defPath,
 	})
 	if err == nil && len(paths) > 0 {
+		a.lastBrowsedDir = paths[0]
 		if a.win != nil {
 			a.win.Update(func() {
 				a.cacheDirInput = paths[0]
@@ -877,9 +1108,20 @@ func (a *DesktopApp) pickPreindexDir() {
 }
 
 func (a *DesktopApp) executeSearch() {
-	if a.queryPath == "" || a.searchDir == "" {
+	resolvedQuery := expandPath(strings.TrimSpace(a.queryPath))
+	resolvedSearch := expandPath(strings.TrimSpace(a.searchDir))
+
+	if resolvedQuery == "" || resolvedSearch == "" {
 		if a.win != nil {
 			a.win.Update(func() { a.searchStatus = "Please select both query image and search directory." })
+		}
+		return
+	}
+
+	st, err := os.Stat(resolvedSearch)
+	if err != nil || !st.IsDir() {
+		if a.win != nil {
+			a.win.Update(func() { a.searchStatus = "Target search directory does not exist: " + resolvedSearch })
 		}
 		return
 	}
@@ -895,7 +1137,7 @@ func (a *DesktopApp) executeSearch() {
 	m, _ := engine.ParseMetric(a.searchMetric)
 	topK, _ := strconv.Atoi(a.searchTopK)
 	opts := search.SearchOptions{
-		SearchDir:   a.searchDir,
+		SearchDir:   resolvedSearch,
 		Metric:      m,
 		Threshold:   float32(a.searchThreshold),
 		TopK:        topK,
@@ -903,7 +1145,7 @@ func (a *DesktopApp) executeSearch() {
 		UseCache:    true,
 	}
 
-	queryImg, _, err := search.OpenImage(a.queryPath)
+	queryImg, _, err := search.OpenImage(resolvedQuery)
 	if err != nil {
 		if a.win != nil {
 			a.win.Update(func() {
@@ -914,7 +1156,7 @@ func (a *DesktopApp) executeSearch() {
 		return
 	}
 
-	rep, err := search.SearchDirectory(context.Background(), queryImg, a.queryPath, opts, a.cache, func(scanned, total int) {
+	rep, err := search.SearchDirectory(context.Background(), queryImg, resolvedQuery, opts, a.cache, func(scanned, total int) {
 		if a.win != nil {
 			a.win.Update(func() {
 				a.searchStatus = fmt.Sprintf("Scanning candidates: %d / %d", scanned, total)
@@ -959,9 +1201,18 @@ func (a *DesktopApp) executeSearch() {
 }
 
 func (a *DesktopApp) executeClusters() {
-	if a.clusterDir == "" {
+	resolvedCluster := expandPath(strings.TrimSpace(a.clusterDir))
+	if resolvedCluster == "" {
 		if a.win != nil {
 			a.win.Update(func() { a.clusterStatus = "Please select a target directory." })
+		}
+		return
+	}
+
+	st, err := os.Stat(resolvedCluster)
+	if err != nil || !st.IsDir() {
+		if a.win != nil {
+			a.win.Update(func() { a.clusterStatus = "Target directory does not exist: " + resolvedCluster })
 		}
 		return
 	}
@@ -979,7 +1230,7 @@ func (a *DesktopApp) executeClusters() {
 
 	rep, err := cluster.FindDuplicateClusters(
 		context.Background(),
-		a.clusterDir,
+		resolvedCluster,
 		m,
 		float32(a.clusterThreshold),
 		h,
@@ -1033,7 +1284,7 @@ func (a *DesktopApp) executeClusters() {
 }
 
 func (a *DesktopApp) executePreindex() {
-	dir := a.cacheDirInput
+	dir := expandPath(strings.TrimSpace(a.cacheDirInput))
 	if dir == "" || a.cache == nil {
 		return
 	}

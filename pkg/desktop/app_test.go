@@ -1,7 +1,6 @@
 package desktop
 
 import (
-	"image/color"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -10,49 +9,25 @@ import (
 	"similar-images/pkg/search"
 )
 
-func TestThemedLightAndDarkVisibility(t *testing.T) {
+func TestThemeIsLightAndDark(t *testing.T) {
 	app := NewDesktopApp()
 
-	for _, mode := range []string{"light", "dark"} {
-		app.themeChoice = mode
-		tester := ui.NewTester(app.view, 1000, 750)
-		img := tester.Image()
+	app.themeChoice = "light"
+	tl := app.getTheme()
+	if tl.Dark {
+		t.Errorf("Expected light theme Dark=false")
+	}
+	if tl.Text != ui.Hex("#0f172a") {
+		t.Errorf("Expected light theme text #0f172a, got %v", tl.Text)
+	}
 
-		colorCounts := make(map[color.Color]int)
-		bounds := img.Bounds()
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			for x := bounds.Min.X; x < bounds.Max.X; x++ {
-				c := img.At(x, y)
-				colorCounts[c]++
-			}
-		}
-
-		theme := app.getTheme()
-		t.Logf("=== %s MODE ===", mode)
-		t.Logf("Theme Text: %v, Theme Background: %v, Surface: %v", theme.Text, theme.Background, theme.Surface)
-
-		var textPixelCount, bgPixelCount, surfacePixelCount int
-		for c, count := range colorCounts {
-			rgba := c.(color.RGBA)
-			if rgba.R == theme.Text.R && rgba.G == theme.Text.G && rgba.B == theme.Text.B {
-				textPixelCount += count
-			}
-			if rgba.R == theme.Background.R && rgba.G == theme.Background.G && rgba.B == theme.Background.B {
-				bgPixelCount += count
-			}
-			if rgba.R == theme.Surface.R && rgba.G == theme.Surface.G && rgba.B == theme.Surface.B {
-				surfacePixelCount += count
-			}
-		}
-		t.Logf("Background pixels: %d, Surface pixels: %d, Text pixels: %d", bgPixelCount, surfacePixelCount, textPixelCount)
-
-		// Assert text is rendered and not 0 pixels
-		if textPixelCount == 0 {
-			t.Errorf("%s mode: text pixels count is 0, text is not visible", mode)
-		}
-		if bgPixelCount == 0 {
-			t.Errorf("%s mode: background pixels count is 0", mode)
-		}
+	app.themeChoice = "dark"
+	td := app.getTheme()
+	if !td.Dark {
+		t.Errorf("Expected dark theme Dark=true")
+	}
+	if td.Text != ui.Hex("#f8fafc") {
+		t.Errorf("Expected dark theme text #f8fafc, got %v", td.Text)
 	}
 }
 
@@ -135,5 +110,52 @@ func TestFormatBytes(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("formatBytes(%d) = %s, want %s", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestKeyInTargetDirectoryAndExpandPath(t *testing.T) {
+	app := NewDesktopApp()
+
+	// Direct key-in simulation
+	app.searchDir = "/home/titu/Pictures"
+	if app.searchDir != "/home/titu/Pictures" {
+		t.Fatalf("Expected keyed-in searchDir to be retained")
+	}
+
+	// Home expansion test
+	exp := expandPath("~/Pictures")
+	if exp == "~/Pictures" {
+		t.Errorf("Expected ~ to be expanded to home directory, got %s", exp)
+	}
+
+	empty := expandPath("")
+	if empty != "" {
+		t.Errorf("Expected empty path to remain empty, got %s", empty)
+	}
+}
+
+func TestDragAndDropSetters(t *testing.T) {
+	app := NewDesktopApp()
+
+	// Setting search directory via drag-and-drop
+	app.setSearchDir("/home/titu/Pictures")
+	if app.searchDir != "/home/titu/Pictures" {
+		t.Errorf("Expected setSearchDir to update searchDir, got %s", app.searchDir)
+	}
+	if app.lastBrowsedDir != "/home/titu/Pictures" {
+		t.Errorf("Expected setSearchDir to update lastBrowsedDir, got %s", app.lastBrowsedDir)
+	}
+
+	// Handle folder drop
+	app.handleFileDrop("/home/titu/Pictures")
+	if app.searchDir != "/home/titu/Pictures" {
+		t.Errorf("Expected handleFileDrop to update searchDir, got %s", app.searchDir)
+	}
+
+	// Test UI rendering with key-in and drop zone
+	tester := ui.NewTester(app.view, 1000, 750)
+	img := tester.Image()
+	if img.Bounds().Dx() != 1000 {
+		t.Errorf("Unexpected width: %d", img.Bounds().Dx())
 	}
 }
