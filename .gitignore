@@ -1,0 +1,17 @@
+# Binaries
+similar-images
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test/Sample artifacts
+samples/
+*.db
+*.db-wal
+*.db-shm
+
+# IDE & OS
+.DS_Store
+.idea/
+.vscode/
