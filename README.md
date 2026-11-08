@@ -40,8 +40,17 @@ Built with a unified multi-algorithm similarity suite supporting structural perc
 Requires Go 1.27+:
 
 ```bash
-# Build standalone binary (zero CGO)
-CGO_ENABLED=0 go build -o similar-images .
+# Build using Makefile (pure Go, CGO_ENABLED=0)
+make build
+
+# Or directly with go
+CGO_ENABLED=0 go build -ldflags="-s -w" -o similar-images .
+
+# Run test suite
+make test
+
+# Launch desktop GUI
+make desktop
 ```
 
 ---
