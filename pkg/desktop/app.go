@@ -21,6 +21,9 @@ type DesktopApp struct {
 	win   *mygo.Window
 	cache *cache.Cache
 
+	// Theme mode: "dark" or "light"
+	themeChoice string
+
 	// Tabs
 	activeTab int // 0: Search, 1: Comparison, 2: Clusters, 3: Cache
 
@@ -68,6 +71,7 @@ func NewDesktopApp() *DesktopApp {
 	c, _ := cache.Open(cache.DefaultCachePath())
 	return &DesktopApp{
 		cache:            c,
+		themeChoice:      "dark",
 		activeTab:        0,
 		searchMetric:     "phash",
 		searchThreshold:  80.0,
@@ -87,12 +91,13 @@ func Launch() error {
 	mygo.App.SetName("similar-images")
 	mygo.App.WhenReady(func() {
 		appState.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "similar-images - Visual Similarity & Duplicate Finder",
-			Width:     1100,
-			Height:    760,
-			MinWidth:  800,
-			MinHeight: 600,
-			Content:   ui.View(appState.view),
+			Title:           "similar-images - Visual Similarity & Duplicate Finder",
+			Width:           1100,
+			Height:          760,
+			MinWidth:        800,
+			MinHeight:       600,
+			BackgroundColor: "light-dark(#ffffff, #18181b)",
+			Content:         ui.View(appState.view),
 		})
 		appState.refreshCacheStats()
 	})
@@ -101,20 +106,41 @@ func Launch() error {
 }
 
 func (a *DesktopApp) view(c *ui.Context) {
+	// Apply active theme
+	if a.themeChoice == "dark" {
+		c.SetTheme(ui.DarkTheme())
+	} else if a.themeChoice == "light" {
+		c.SetTheme(ui.LightTheme())
+	}
 	t := c.Theme()
 
-	ui.Column(c).Fill().Padding(16).Gap(12).Children(func() {
-		// Header Title & Version
+	// Fill the root window background with the theme background color
+	c.Root().Background(t.Background)
+
+	ui.Column(c).Fill().Background(t.Background).Padding(16).Gap(14).Children(func() {
+		// Header Title & Theme Switcher
 		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
 			ui.Text(c, "similar-images").FontSize(22).Bold().TextColor(t.Text)
-			ui.Text(c, "Visual Perceptual Search & Clustering").FontSize(14).TextColor(t.TextMuted)
+			ui.Text(c, "Visual Perceptual Search & Clustering").FontSize(14).TextColor(t.TextMuted).Grow(1)
+
+			themeBtnLabel := "Switch to Light Theme"
+			if a.themeChoice == "light" {
+				themeBtnLabel = "Switch to Dark Theme"
+			}
+			if ui.Button(c, themeBtnLabel).Clicked() {
+				if a.themeChoice == "light" {
+					a.themeChoice = "dark"
+				} else {
+					a.themeChoice = "light"
+				}
+			}
 		})
 
 		// Tab Bar
 		ui.Tabs(c, &a.activeTab, "1-to-N Search", "Comparison View", "Duplicate Clusters", "Cache Management")
 
 		// Active Tab Content
-		ui.Scroll(c).Grow(1).Padding(8).Children(func() {
+		ui.Scroll(c).Grow(1).Padding(4).Children(func() {
 			switch a.activeTab {
 			case 0:
 				a.viewSearchTab(c)
@@ -133,70 +159,73 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 	t := c.Theme()
 
 	ui.Column(c).Fill().Gap(14).Children(func() {
-		// Query Image Selector
-		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-			if ui.Button(c, "Select Query Image...").Clicked() {
-				go a.pickQueryImage()
-			}
-			pathText := a.queryPath
-			if pathText == "" {
-				pathText = "No query image selected"
-			}
-			ui.Text(c, pathText).TextColor(t.TextMuted).Grow(1)
-		})
-
-		// Search Directory Selector
-		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-			if ui.Button(c, "Select Search Directory...").Clicked() {
-				go a.pickSearchDir()
-			}
-			dirText := a.searchDir
-			if dirText == "" {
-				dirText = "No directory selected"
-			}
-			ui.Text(c, dirText).TextColor(t.TextMuted).Grow(1)
-		})
-
-		// Search Parameters
-		ui.Row(c).AlignItems(ui.Center).Gap(16).Children(func() {
-			ui.Text(c, "Metric:")
-			ui.Select(c, &a.searchMetric, []string{"phash", "pdq", "wavelet", "dhash", "palette"})
-
-			ui.Text(c, fmt.Sprintf("Threshold: %.0f%%", a.searchThreshold))
-			ui.Slider(c, &a.searchThreshold, 50.0, 100.0).Width(140)
-
-			ui.Text(c, "Top-K:")
-			ui.TextInput(c, &a.searchTopK).Width(60)
-
-			ui.Checkbox(c, &a.searchRecursive, "Recursive")
-		})
-
-		// Action Bar
-		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-			btn := ui.PrimaryButton(c, "Run Similarity Search")
-			if a.searchRunning {
-				btn.Disabled(true)
-			} else if btn.Clicked() {
-				go a.executeSearch()
-			}
-
-			if a.searchStatus != "" {
-				ui.Text(c, a.searchStatus).TextColor(t.TextMuted)
-			}
-		})
-
-		// Query Thumbnail Preview (if loaded)
-		if a.queryImgThumb != nil {
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "Query Preview:").FontSize(12).TextColor(t.TextMuted)
-				ui.Image(c, a.queryImgThumb).Size(64, 64)
+		// Controls Card Panel
+		ui.Column(c).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12).Children(func() {
+			// Query Image Selector
+			ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+				if ui.Button(c, "Select Query Image...").Clicked() {
+					go a.pickQueryImage()
+				}
+				pathText := a.queryPath
+				if pathText == "" {
+					pathText = "No query image selected"
+				}
+				ui.Text(c, pathText).TextColor(t.TextMuted).Grow(1)
 			})
-		}
+
+			// Search Directory Selector
+			ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+				if ui.Button(c, "Select Search Directory...").Clicked() {
+					go a.pickSearchDir()
+				}
+				dirText := a.searchDir
+				if dirText == "" {
+					dirText = "No directory selected"
+				}
+				ui.Text(c, dirText).TextColor(t.TextMuted).Grow(1)
+			})
+
+			// Search Parameters
+			ui.Row(c).AlignItems(ui.Center).Gap(16).Children(func() {
+				ui.Text(c, "Metric:").TextColor(t.Text)
+				ui.Select(c, &a.searchMetric, []string{"phash", "pdq", "wavelet", "dhash", "palette"})
+
+				ui.Text(c, fmt.Sprintf("Threshold: %.0f%%", a.searchThreshold)).TextColor(t.Text)
+				ui.Slider(c, &a.searchThreshold, 50.0, 100.0).Width(140)
+
+				ui.Text(c, "Top-K:").TextColor(t.Text)
+				ui.TextInput(c, &a.searchTopK).Width(60)
+
+				ui.Checkbox(c, &a.searchRecursive, "Recursive")
+			})
+
+			// Action Bar
+			ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+				btn := ui.PrimaryButton(c, "Run Similarity Search")
+				if a.searchRunning {
+					btn.Disabled(true)
+				} else if btn.Clicked() {
+					go a.executeSearch()
+				}
+
+				if a.searchStatus != "" {
+					ui.Text(c, a.searchStatus).TextColor(t.TextMuted)
+				}
+			})
+
+			// Query Thumbnail Preview (if loaded)
+			if a.queryImgThumb != nil {
+				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "Query Preview:").FontSize(12).TextColor(t.TextMuted)
+					ui.Image(c, a.queryImgThumb).Size(64, 64)
+				})
+			}
+		})
 
 		// Results Header and List
 		if a.searchReport != nil {
 			matches := a.searchReport.Matches
-			ui.Text(c, fmt.Sprintf("Found %d match(es) in %dms:", len(matches), a.searchReport.DurationMs)).Bold()
+			ui.Text(c, fmt.Sprintf("Found %d match(es) in %dms:", len(matches), a.searchReport.DurationMs)).Bold().TextColor(t.Text)
 
 			if len(matches) == 0 {
 				ui.Text(c, "No images matched the cutoff threshold.").TextColor(t.TextMuted)
@@ -204,13 +233,13 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 				for idx, match := range matches {
 					m := match
 					rank := idx + 1
-					ui.Row(c).Padding(8).Gap(10).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, fmt.Sprintf("#%d", rank)).Bold().Width(30)
+					ui.Row(c).Padding(10).Radius(6).Background(t.Surface).Border(1, t.Border).Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, fmt.Sprintf("#%d", rank)).Bold().TextColor(t.Text).Width(30)
 						ui.Text(c, m.SimilarityScore.String()).Bold().TextColor(ui.Hex("#16a34a")).Width(65)
 						dimStr := fmt.Sprintf("%dx%d", m.Width, m.Height)
 						ui.Text(c, dimStr).TextColor(t.TextMuted).Width(90)
 						ui.Text(c, formatBytes(m.FileSize)).TextColor(t.TextMuted).Width(75)
-						ui.Text(c, filepath.Base(m.Path)).Grow(1)
+						ui.Text(c, filepath.Base(m.Path)).TextColor(t.Text).Grow(1)
 
 						if ui.Button(c, "Compare").Clicked() {
 							a.openComparison(m.Path, m.SimilarityScore.String(), m.Width, m.Height, m.FileSize)
@@ -231,35 +260,37 @@ func (a *DesktopApp) viewComparisonTab(c *ui.Context) {
 
 	ui.Column(c).Fill().Gap(14).Children(func() {
 		if a.compareMatchPath == "" {
-			ui.Text(c, "No candidate match selected for comparison.").TextColor(t.TextMuted)
-			ui.Text(c, "Run a search and click 'Compare' next to any match card.")
+			ui.Column(c).Padding(24).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
+				ui.Text(c, "No candidate match selected for comparison.").TextColor(t.TextMuted)
+				ui.Text(c, "Run a search and click 'Compare' next to any match card.").TextColor(t.Text)
+			})
 			return
 		}
 
 		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-			ui.Text(c, "Similarity Score:").Bold()
+			ui.Text(c, "Similarity Score:").Bold().TextColor(t.Text)
 			ui.Text(c, a.compareScore).FontSize(20).Bold().TextColor(ui.Hex("#16a34a"))
 		})
 
 		ui.Row(c).Fill().Gap(24).Children(func() {
 			// Query Image Card
-			ui.Column(c).Grow(1).Padding(12).Gap(8).Children(func() {
-				ui.Text(c, "Query Image").Bold()
+			ui.Column(c).Grow(1).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
+				ui.Text(c, "Query Image").Bold().TextColor(t.Text)
 				if a.compareQueryThumb != nil {
 					ui.Image(c, a.compareQueryThumb).Fit(ui.Contain).Grow(1).MaxHeight(360)
 				}
 				ui.Text(c, a.queryPath).FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, a.compareQueryMeta).FontSize(13)
+				ui.Text(c, a.compareQueryMeta).FontSize(13).TextColor(t.Text)
 			})
 
 			// Match Candidate Card
-			ui.Column(c).Grow(1).Padding(12).Gap(8).Children(func() {
-				ui.Text(c, "Candidate Match").Bold()
+			ui.Column(c).Grow(1).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
+				ui.Text(c, "Candidate Match").Bold().TextColor(t.Text)
 				if a.compareMatchThumb != nil {
 					ui.Image(c, a.compareMatchThumb).Fit(ui.Contain).Grow(1).MaxHeight(360)
 				}
 				ui.Text(c, a.compareMatchPath).FontSize(12).TextColor(t.TextMuted)
-				ui.Text(c, a.compareMatchMeta).FontSize(13)
+				ui.Text(c, a.compareMatchMeta).FontSize(13).TextColor(t.Text)
 
 				if ui.Button(c, "Move Candidate to Trash").Clicked() {
 					_ = cluster.MoveToTrash(a.compareMatchPath, a.cache)
@@ -275,60 +306,62 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 	t := c.Theme()
 
 	ui.Column(c).Fill().Gap(14).Children(func() {
-		// Target Directory Selector
-		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-			if ui.Button(c, "Select Target Directory...").Clicked() {
-				go a.pickClusterDir()
-			}
-			dirText := a.clusterDir
-			if dirText == "" {
-				dirText = "No directory selected"
-			}
-			ui.Text(c, dirText).TextColor(t.TextMuted).Grow(1)
-		})
+		// Target Directory Selector Card
+		ui.Column(c).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+				if ui.Button(c, "Select Target Directory...").Clicked() {
+					go a.pickClusterDir()
+				}
+				dirText := a.clusterDir
+				if dirText == "" {
+					dirText = "No directory selected"
+				}
+				ui.Text(c, dirText).TextColor(t.TextMuted).Grow(1)
+			})
 
-		// Cluster Parameters
-		ui.Row(c).AlignItems(ui.Center).Gap(16).Children(func() {
-			ui.Text(c, "Metric:")
-			ui.Select(c, &a.clusterMetric, []string{"phash", "pdq", "wavelet", "dhash", "palette"})
+			// Cluster Parameters
+			ui.Row(c).AlignItems(ui.Center).Gap(16).Children(func() {
+				ui.Text(c, "Metric:").TextColor(t.Text)
+				ui.Select(c, &a.clusterMetric, []string{"phash", "pdq", "wavelet", "dhash", "palette"})
 
-			ui.Text(c, fmt.Sprintf("Threshold: %.0f%%", a.clusterThreshold))
-			ui.Slider(c, &a.clusterThreshold, 50.0, 100.0).Width(140)
+				ui.Text(c, fmt.Sprintf("Threshold: %.0f%%", a.clusterThreshold)).TextColor(t.Text)
+				ui.Slider(c, &a.clusterThreshold, 50.0, 100.0).Width(140)
 
-			ui.Text(c, "Keep Rule:")
-			ui.Select(c, &a.clusterHeuristic, []string{"resolution", "size", "oldest", "newest"})
+				ui.Text(c, "Keep Rule:").TextColor(t.Text)
+				ui.Select(c, &a.clusterHeuristic, []string{"resolution", "size", "oldest", "newest"})
 
-			ui.Checkbox(c, &a.clusterRecursive, "Recursive")
-		})
+				ui.Checkbox(c, &a.clusterRecursive, "Recursive")
+			})
 
-		// Actions
-		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-			btn := ui.PrimaryButton(c, "Find Duplicate Clusters")
-			if a.clusterRunning {
-				btn.Disabled(true)
-			} else if btn.Clicked() {
-				go a.executeClusters()
-			}
+			// Actions
+			ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+				btn := ui.PrimaryButton(c, "Find Duplicate Clusters")
+				if a.clusterRunning {
+					btn.Disabled(true)
+				} else if btn.Clicked() {
+					go a.executeClusters()
+				}
 
-			if a.clusterStatus != "" {
-				ui.Text(c, a.clusterStatus).TextColor(t.TextMuted)
-			}
+				if a.clusterStatus != "" {
+					ui.Text(c, a.clusterStatus).TextColor(t.TextMuted)
+				}
+			})
 		})
 
 		// Clusters Output
 		if a.clusterReport != nil {
 			rep := a.clusterReport
 			ui.Text(c, fmt.Sprintf("Found %d cluster(s) (%d redundant copies) in %dms:",
-				rep.ClusterCount, rep.DuplicateCount, rep.DurationMs)).Bold()
+				rep.ClusterCount, rep.DuplicateCount, rep.DurationMs)).Bold().TextColor(t.Text)
 
 			if rep.ClusterCount == 0 {
 				ui.Text(c, "No duplicate clusters detected in target directory.").TextColor(t.TextMuted)
 			} else {
 				for _, cl := range rep.Clusters {
 					clusterItem := cl
-					ui.Column(c).Padding(10).Gap(8).Children(func() {
+					ui.Column(c).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
 						ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-							ui.Text(c, fmt.Sprintf("Cluster #%d (%d items)", clusterItem.ID, len(clusterItem.AllCandidates))).Bold()
+							ui.Text(c, fmt.Sprintf("Cluster #%d (%d items)", clusterItem.ID, len(clusterItem.AllCandidates))).Bold().TextColor(t.Text)
 							if ui.Button(c, "Trash All Duplicates in Cluster").Clicked() {
 								for _, dup := range clusterItem.Duplicates {
 									_ = cluster.MoveToTrash(dup.Path, a.cache)
@@ -338,21 +371,21 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 						})
 
 						// Canonical Candidate (Keep)
-						ui.Row(c).Padding(4).Gap(10).AlignItems(ui.Center).Children(func() {
+						ui.Row(c).Padding(6).Radius(4).Background(t.Background).Gap(10).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, "[KEEP]").Bold().TextColor(ui.Hex("#16a34a")).Width(50)
 							ui.Text(c, fmt.Sprintf("%dx%d", clusterItem.Canonical.Width, clusterItem.Canonical.Height)).TextColor(t.TextMuted).Width(80)
 							ui.Text(c, formatBytes(clusterItem.Canonical.FileSize)).TextColor(t.TextMuted).Width(70)
-							ui.Text(c, clusterItem.Canonical.Path).Grow(1)
+							ui.Text(c, clusterItem.Canonical.Path).TextColor(t.Text).Grow(1)
 						})
 
 						// Duplicate Candidates
 						for _, dup := range clusterItem.Duplicates {
 							dupItem := dup
-							ui.Row(c).Padding(4).Gap(10).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, "[TRASH]").TextColor(ui.Hex("#dc2626")).Width(50)
+							ui.Row(c).Padding(6).Radius(4).Background(t.Background).Gap(10).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, "[TRASH]").Bold().TextColor(ui.Hex("#dc2626")).Width(50)
 								ui.Text(c, fmt.Sprintf("%dx%d", dupItem.Width, dupItem.Height)).TextColor(t.TextMuted).Width(80)
 								ui.Text(c, formatBytes(dupItem.FileSize)).TextColor(t.TextMuted).Width(70)
-								ui.Text(c, dupItem.Path).Grow(1)
+								ui.Text(c, dupItem.Path).TextColor(t.Text).Grow(1)
 
 								if ui.Button(c, "Trash").Clicked() {
 									_ = cluster.MoveToTrash(dupItem.Path, a.cache)
@@ -371,45 +404,49 @@ func (a *DesktopApp) viewCacheTab(c *ui.Context) {
 	t := c.Theme()
 
 	ui.Column(c).Fill().Gap(14).Children(func() {
-		ui.Text(c, "SQLite Fingerprint Cache").FontSize(18).Bold()
+		ui.Column(c).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12).Children(func() {
+			ui.Text(c, "SQLite Fingerprint Cache").FontSize(18).Bold().TextColor(t.Text)
 
-		ui.Text(c, a.cacheStatsText).TextColor(t.TextMuted)
+			ui.Text(c, a.cacheStatsText).TextColor(t.TextMuted)
 
-		ui.Row(c).Gap(12).Children(func() {
-			if ui.Button(c, "Vacuum Cache Database").Clicked() {
-				if a.cache != nil {
-					_ = a.cache.Vacuum()
+			ui.Row(c).Gap(12).Children(func() {
+				if ui.Button(c, "Vacuum Cache Database").Clicked() {
+					if a.cache != nil {
+						_ = a.cache.Vacuum()
+						a.refreshCacheStats()
+					}
+				}
+				if ui.Button(c, "Refresh Statistics").Clicked() {
 					a.refreshCacheStats()
 				}
-			}
-			if ui.Button(c, "Refresh Statistics").Clicked() {
-				a.refreshCacheStats()
-			}
+			})
 		})
 
-		ui.Text(c, "Proactive Directory Pre-Indexing").Bold()
-		ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
-			if ui.Button(c, "Select Directory to Pre-index...").Clicked() {
-				go a.pickPreindexDir()
-			}
-			txt := a.cacheDirInput
-			if txt == "" {
-				txt = "No directory chosen"
-			}
-			ui.Text(c, txt).TextColor(t.TextMuted).Grow(1)
-		})
+		ui.Column(c).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12).Children(func() {
+			ui.Text(c, "Proactive Directory Pre-Indexing").Bold().TextColor(t.Text)
+			ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+				if ui.Button(c, "Select Directory to Pre-index...").Clicked() {
+					go a.pickPreindexDir()
+				}
+				txt := a.cacheDirInput
+				if txt == "" {
+					txt = "No directory chosen"
+				}
+				ui.Text(c, txt).TextColor(t.TextMuted).Grow(1)
+			})
 
-		ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
-			btn := ui.PrimaryButton(c, "Start Pre-indexing")
-			if a.cacheRunning || a.cacheDirInput == "" {
-				btn.Disabled(true)
-			} else if btn.Clicked() {
-				go a.executePreindex()
-			}
+			ui.Row(c).AlignItems(ui.Center).Gap(12).Children(func() {
+				btn := ui.PrimaryButton(c, "Start Pre-indexing")
+				if a.cacheRunning || a.cacheDirInput == "" {
+					btn.Disabled(true)
+				} else if btn.Clicked() {
+					go a.executePreindex()
+				}
 
-			if a.cacheStatus != "" {
-				ui.Text(c, a.cacheStatus).TextColor(t.TextMuted)
-			}
+				if a.cacheStatus != "" {
+					ui.Text(c, a.cacheStatus).TextColor(t.TextMuted)
+				}
+			})
 		})
 	})
 }
