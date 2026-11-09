@@ -19,3 +19,5 @@ samples/
 # Dependencies
 vendor/
 
+# Generated files
+graphify-out/

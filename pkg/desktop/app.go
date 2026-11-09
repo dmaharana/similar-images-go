@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -155,6 +156,7 @@ func (a *DesktopApp) getTheme() *ui.Theme {
 		t.AccentPressed = ui.Hex("#1e40af")
 		t.AccentText = ui.Hex("#ffffff")
 		t.Radius = 8
+		t.TooltipDelay = 250 * time.Millisecond
 		return t
 	}
 
@@ -172,6 +174,7 @@ func (a *DesktopApp) getTheme() *ui.Theme {
 	t.AccentPressed = ui.Hex("#2563eb")
 	t.AccentText = ui.Hex("#ffffff")
 	t.Radius = 8
+	t.TooltipDelay = 250 * time.Millisecond
 	return t
 }
 
@@ -347,10 +350,15 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 						ui.Column(c).Grow(1).Gap(3).Children(func() {
 							ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 								ui.Text(c, filepath.Base(a.queryPath)).Bold().FontSize(13).TextColor(t.Text)
-								changeBtn := ui.Button(c, "Change").Height(22)
-								if changeBtn.Clicked() {
-									go a.pickQueryImage()
-								}
+								ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+									if ui.Button(c, "📂").Height(22).Tooltip("Show in Finder").Clicked() {
+										a.showInFileFinder(a.queryPath)
+									}
+									changeBtn := ui.Button(c, "Change").Height(22)
+									if changeBtn.Clicked() {
+										go a.pickQueryImage()
+									}
+								})
 							})
 							ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 								if a.queryDimensions != "" {
@@ -560,12 +568,15 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 								ui.Text(c, formatBytes(m.FileSize)).FontSize(11).TextColor(t.TextMuted)
 								ui.Text(c, m.Path).FontSize(10).TextColor(t.TextMuted)
 
-								// Actions row
+								// Actions row: single row with icons and hover tooltips
 								ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-									if ui.Button(c, "👁 Compare").Grow(1).Clicked() {
+									if ui.Button(c, "👁").Grow(1).Tooltip("Compare").Clicked() {
 										a.openComparison(m.Path, m.SimilarityScore.String(), m.SimilarityScore.AsPercent(), m.Width, m.Height, m.FileSize)
 									}
-									if ui.Button(c, "🗑 Trash").Clicked() {
+									if ui.Button(c, "📂").Grow(1).Tooltip("Show in Finder").Clicked() {
+										a.showInFileFinder(m.Path)
+									}
+									if ui.Button(c, "🗑").Grow(1).Tooltip("Move to Trash").Clicked() {
 										_ = cluster.MoveToTrash(m.Path, a.cache)
 										a.removeMatchFromReport(m.Path)
 									}
@@ -594,10 +605,13 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 							ui.Text(c, filepath.Base(m.Path)).Bold().TextColor(t.Text).Width(160)
 							ui.Text(c, m.Path).FontSize(11).TextColor(t.TextMuted).Grow(1)
 
-							if ui.Button(c, "Compare").Clicked() {
+							if ui.Button(c, "👁 Compare").Tooltip("Compare").Clicked() {
 								a.openComparison(m.Path, m.SimilarityScore.String(), m.SimilarityScore.AsPercent(), m.Width, m.Height, m.FileSize)
 							}
-							if ui.Button(c, "Trash").Clicked() {
+							if ui.Button(c, "📂 Finder").Tooltip("Show in Finder").Clicked() {
+								a.showInFileFinder(m.Path)
+							}
+							if ui.Button(c, "🗑 Trash").Tooltip("Move to Trash").Clicked() {
 								_ = cluster.MoveToTrash(m.Path, a.cache)
 								a.removeMatchFromReport(m.Path)
 							}
@@ -640,7 +654,12 @@ func (a *DesktopApp) viewComparisonTab(c *ui.Context) {
 		ui.Row(c).Fill().Gap(16).Children(func() {
 			// Query Image Card
 			ui.Column(c).Grow(1).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
-				ui.Text(c, "REFERENCE QUERY IMAGE").Bold().FontSize(11).TextColor(t.Accent)
+				ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+					ui.Text(c, "REFERENCE QUERY IMAGE").Bold().FontSize(11).TextColor(t.Accent)
+					if ui.Button(c, "Show in Finder").Clicked() {
+						a.showInFileFinder(a.queryPath)
+					}
+				})
 				ui.Row(c).Height(380).Radius(6).Background(t.Background).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 					if a.compareQueryThumb != nil {
 						ui.Image(c, a.compareQueryThumb).Fit(ui.Contain).MaxHeight(370)
@@ -655,13 +674,18 @@ func (a *DesktopApp) viewComparisonTab(c *ui.Context) {
 			ui.Column(c).Grow(1).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(8).Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 					ui.Text(c, "CANDIDATE MATCH").Bold().FontSize(11).TextColor(ui.Hex("#16a34a"))
-					if ui.Button(c, "Move Candidate to Trash").Clicked() {
-						_ = cluster.MoveToTrash(a.compareMatchPath, a.cache)
-						a.removeMatchFromReport(a.compareMatchPath)
-						a.compareMatchPath = ""
-						a.compareMatchThumb = nil
-						a.activeTab = 0
-					}
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						if ui.Button(c, "Show in Finder").Clicked() {
+							a.showInFileFinder(a.compareMatchPath)
+						}
+						if ui.Button(c, "Move Candidate to Trash").Clicked() {
+							_ = cluster.MoveToTrash(a.compareMatchPath, a.cache)
+							a.removeMatchFromReport(a.compareMatchPath)
+							a.compareMatchPath = ""
+							a.compareMatchThumb = nil
+							a.activeTab = 0
+						}
+					})
 				})
 				ui.Row(c).Height(380).Radius(6).Background(t.Background).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 					if a.compareMatchThumb != nil {
@@ -812,8 +836,13 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 									}
 								})
 								ui.Column(c).Padding(8).Gap(4).Children(func() {
-									ui.Row(c).PaddingX(4).PaddingY(1).Radius(3).Background(ui.Hex("#dcfce7")).Children(func() {
-										ui.Text(c, "KEEP (ORIGINAL)").Bold().FontSize(10).TextColor(ui.Hex("#166534"))
+									ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+										ui.Row(c).PaddingX(4).PaddingY(1).Radius(3).Background(ui.Hex("#dcfce7")).Children(func() {
+											ui.Text(c, "KEEP (ORIGINAL)").Bold().FontSize(10).TextColor(ui.Hex("#166534"))
+										})
+										if ui.Button(c, "📂").Tooltip("Show in Finder").Clicked() {
+											a.showInFileFinder(clusterItem.Canonical.Path)
+										}
 									})
 									ui.Text(c, filepath.Base(clusterItem.Canonical.Path)).Bold().FontSize(11).TextColor(t.Text)
 									dimStr := fmt.Sprintf("%dx%d • %s", clusterItem.Canonical.Width, clusterItem.Canonical.Height, formatBytes(clusterItem.Canonical.FileSize))
@@ -842,10 +871,15 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 											ui.Row(c).PaddingX(4).PaddingY(1).Radius(3).Background(ui.Hex("#fee2e2")).Children(func() {
 												ui.Text(c, "DUPLICATE").Bold().FontSize(10).TextColor(ui.Hex("#991b1b"))
 											})
-											if ui.Button(c, "Trash").Clicked() {
-												_ = cluster.MoveToTrash(dupItem.Path, a.cache)
-												a.refreshClusters()
-											}
+											ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+												if ui.Button(c, "📂").Tooltip("Show in Finder").Clicked() {
+													a.showInFileFinder(dupItem.Path)
+												}
+												if ui.Button(c, "🗑").Tooltip("Move to Trash").Clicked() {
+													_ = cluster.MoveToTrash(dupItem.Path, a.cache)
+													a.refreshClusters()
+												}
+											})
 										})
 										ui.Text(c, filepath.Base(dupItem.Path)).Bold().FontSize(11).TextColor(t.Text)
 										dimStr := fmt.Sprintf("%dx%d • %s", dupItem.Width, dupItem.Height, formatBytes(dupItem.FileSize))
@@ -1411,6 +1445,33 @@ func (a *DesktopApp) removeMatchFromReport(path string) {
 		}
 	}
 	a.searchReport.Matches = filtered
+}
+
+func (a *DesktopApp) showInFileFinder(path string) {
+	if path == "" {
+		return
+	}
+	err := ShowInFileFinder(path)
+	var statusMsg string
+	if err != nil {
+		statusMsg = fmt.Sprintf("Error opening file finder: %v", err)
+	} else {
+		statusMsg = fmt.Sprintf("Revealed in file finder: %s", filepath.Base(path))
+	}
+
+	updateState := func() {
+		if a.activeTab == 2 {
+			a.clusterStatus = statusMsg
+		} else {
+			a.searchStatus = statusMsg
+		}
+	}
+
+	if a.win != nil {
+		a.win.Update(updateState)
+	} else {
+		updateState()
+	}
 }
 
 func formatBytes(bytes int64) string {
