@@ -1,6 +1,10 @@
 package desktop
 
 import (
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,5 +289,121 @@ func TestAppShowInFileFinderStatusUpdates(t *testing.T) {
 	app.showInFileFinder("/nonexistent_dir_xyz/missing.jpg")
 	if !strings.Contains(app.clusterStatus, "Error opening file finder") {
 		t.Errorf("Expected clusterStatus to report error, got: %s", app.clusterStatus)
+	}
+}
+
+func createTestPNG(t *testing.T, dir, filename string, r, g, b uint8) string {
+	t.Helper()
+	p := filepath.Join(dir, filename)
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+		}
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatalf("failed to create test image: %v", err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		t.Fatalf("failed to encode test image: %v", err)
+	}
+	return p
+}
+
+func TestQueryCandidateSampling(t *testing.T) {
+	tmpDir := t.TempDir()
+	pA := createTestPNG(t, tmpDir, "a.png", 255, 0, 0)
+	pB := createTestPNG(t, tmpDir, "b.png", 0, 255, 0)
+	pC := createTestPNG(t, tmpDir, "c.png", 0, 0, 255)
+
+	app := NewDesktopApp()
+	app.searchDir = tmpDir
+
+	// Initial random candidate
+	app.pickRandomCandidate()
+	if app.queryPath == "" {
+		t.Fatalf("Expected queryPath to be set after pickRandomCandidate")
+	}
+	if app.sampledIndex < 0 || app.sampledIndex > 2 {
+		t.Fatalf("Expected sampledIndex in [0, 2], got %d", app.sampledIndex)
+	}
+	if len(app.sampledCandidates) != 3 {
+		t.Fatalf("Expected 3 sampledCandidates, got %d", len(app.sampledCandidates))
+	}
+	if app.sampledCandidates[0] != pA || app.sampledCandidates[1] != pB || app.sampledCandidates[2] != pC {
+		t.Fatalf("Expected sorted candidate paths, got %v", app.sampledCandidates)
+	}
+
+	// Test Next Candidate traversal
+	initialIdx := app.sampledIndex
+	app.pickNextCandidate()
+	expectedNext := (initialIdx + 1) % 3
+	if app.sampledIndex != expectedNext {
+		t.Errorf("pickNextCandidate: expected index %d, got %d", expectedNext, app.sampledIndex)
+	}
+	if app.queryPath != app.sampledCandidates[expectedNext] {
+		t.Errorf("pickNextCandidate: expected queryPath %s, got %s", app.sampledCandidates[expectedNext], app.queryPath)
+	}
+
+	// Step two more times to verify wrap-around
+	app.pickNextCandidate()
+	app.pickNextCandidate()
+	if app.sampledIndex != initialIdx {
+		t.Errorf("Expected wrap-around back to %d, got %d", initialIdx, app.sampledIndex)
+	}
+
+	// Test Prev Candidate traversal
+	app.pickPrevCandidate()
+	expectedPrev := (initialIdx - 1 + 3) % 3
+	if app.sampledIndex != expectedPrev {
+		t.Errorf("pickPrevCandidate: expected index %d, got %d", expectedPrev, app.sampledIndex)
+	}
+
+	// Test Another Random Image avoids repeating current image
+	for i := 0; i < 10; i++ {
+		cur := app.sampledIndex
+		app.pickRandomCandidate()
+		if app.sampledIndex == cur {
+			t.Fatalf("pickRandomCandidate repeated current index %d", cur)
+		}
+	}
+
+	// Test UI rendering with sampling toolbar (icon-only buttons with tooltips)
+	tester := ui.NewTester(app.view, 1000, 750)
+	if !tester.HasText("🎲") {
+		t.Errorf("Expected UI to display '🎲' icon button")
+	}
+	if !tester.HasText("⏭") || !tester.HasText("⏮") {
+		t.Errorf("Expected UI to display '⏭' and '⏮' icon buttons")
+	}
+	if !tester.HasText("📂") {
+		t.Errorf("Expected UI to display '📂' icon button")
+	}
+	counterText := fmt.Sprintf("Candidate %d of 3", app.sampledIndex+1)
+	if !tester.HasText(counterText) {
+		t.Errorf("Expected UI to display counter %q, got texts: %v", counterText, tester.Texts())
+	}
+}
+
+func TestQueryCandidateSamplingEmptyDir(t *testing.T) {
+	emptyDir := t.TempDir()
+
+	app := NewDesktopApp()
+	app.searchDir = emptyDir
+
+	app.pickRandomCandidate()
+	if app.queryPath != "" {
+		t.Errorf("Expected queryPath to remain empty for empty directory, got %s", app.queryPath)
+	}
+	if !strings.Contains(app.searchStatus, "No supported images found") {
+		t.Errorf("Expected searchStatus to report no supported images found, got: %s", app.searchStatus)
+	}
+
+	// UI rendering with empty state should show "🎲"
+	tester := ui.NewTester(app.view, 1000, 750)
+	if !tester.HasText("🎲") {
+		t.Errorf("Expected UI to display '🎲' button when empty, got: %v", tester.Texts())
 	}
 }

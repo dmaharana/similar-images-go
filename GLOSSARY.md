@@ -12,6 +12,10 @@ _Avoid_: Source image, input image, probe
 An image discovered within the search target directory evaluated for similarity.
 _Avoid_: Target image, library image, gallery image
 
+**Query Candidate Sampling**:
+The interactive or automated selection of a candidate image discovered within the search target directory to serve as the active query image.
+_Avoid_: Random picking, image cycling, sample query
+
 **Fingerprint**:
 A compact numerical representation extracted from an image used for rapid similarity comparison.
 _Avoid_: Hash (when referring generally to fingerprints), signature, vector

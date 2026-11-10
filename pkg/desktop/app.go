@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +50,13 @@ type DesktopApp struct {
 	searchRunning   bool
 	searchStatus    string
 	searchReport    *search.SearchReport
+
+	// Query Candidate Sampling state
+	sampledCandidates []string
+	sampledIndex      int
+	sampledDir        string
+	sampledRecursive  bool
+	samplingMu        sync.Mutex
 
 	// Search results view mode: "grid" (default) or "list"
 	searchViewMode string
@@ -110,6 +119,7 @@ func NewDesktopApp() *DesktopApp {
 		clusterThreshold: 80.0,
 		clusterHeuristic: "resolution",
 		clusterRecursive: true,
+		sampledIndex:     -1,
 	}
 }
 
@@ -379,6 +389,28 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 							})
 						})
 					})
+
+					// Query Candidate Sampling Toolbar
+					ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+						ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+							if ui.Button(c, "🎲").Height(24).Tooltip("Another random").Clicked() {
+								go a.pickRandomCandidate()
+							}
+							if ui.Button(c, "⏮").Height(24).Tooltip("Prev").Clicked() {
+								go a.pickPrevCandidate()
+							}
+							if ui.Button(c, "⏭").Height(24).Tooltip("Next").Clicked() {
+								go a.pickNextCandidate()
+							}
+							if ui.Button(c, "📂").Height(24).Tooltip("Show infolder").Clicked() {
+								a.showInFileFinder(a.queryPath)
+							}
+						})
+
+						if a.sampledIndex >= 0 && len(a.sampledCandidates) > 0 {
+							ui.Text(c, fmt.Sprintf("Candidate %d of %d", a.sampledIndex+1, len(a.sampledCandidates))).FontSize(11).TextColor(t.TextMuted)
+						}
+					})
 				} else {
 					pickDropBox := ui.Column(c).Height(72).Radius(6).Background(t.Background).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.Center).Gap(4)
 					if queryDragging {
@@ -390,6 +422,14 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 							ui.Text(c, "Drag & Drop Image Here, or click Browse Image...").Bold().FontSize(12).TextColor(t.Text)
 						})
 						ui.Text(c, "Supports JPG, PNG, WebP, GIF, BMP, TIFF").FontSize(11).TextColor(t.TextMuted)
+					})
+
+					// Empty state sampling action
+					ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+						if ui.Button(c, "🎲").Height(24).Tooltip("Another random").Clicked() {
+							go a.pickRandomCandidate()
+						}
+						ui.Text(c, "Pick random image from search target directory").FontSize(11).TextColor(t.TextMuted)
 					})
 				}
 			})
@@ -996,6 +1036,21 @@ func (a *DesktopApp) setQueryImage(p string) {
 		a.queryFileSize = meta.FileSize
 		a.queryImgRaw = thumbImg
 		a.queryImgThumb = thumb
+
+		a.samplingMu.Lock()
+		defer a.samplingMu.Unlock()
+		if a.sampledIndex >= 0 && a.sampledIndex < len(a.sampledCandidates) && a.sampledCandidates[a.sampledIndex] == p {
+			// already aligned
+		} else {
+			found := -1
+			for idx, cand := range a.sampledCandidates {
+				if cand == p {
+					found = idx
+					break
+				}
+			}
+			a.sampledIndex = found
+		}
 	}
 	if a.win != nil {
 		a.win.Update(updateFn)
@@ -1016,11 +1071,189 @@ func (a *DesktopApp) setSearchDir(p string) {
 	a.lastBrowsedDir = p
 	updateFn := func() {
 		a.searchDir = p
+		a.samplingMu.Lock()
+		a.sampledCandidates = nil
+		a.sampledIndex = -1
+		a.sampledDir = ""
+		a.samplingMu.Unlock()
 	}
 	if a.win != nil {
 		a.win.Update(updateFn)
 	} else {
 		updateFn()
+	}
+}
+
+func (a *DesktopApp) ensureSearchDir() (string, error) {
+	dir := expandPath(strings.TrimSpace(a.searchDir))
+	if dir != "" {
+		return dir, nil
+	}
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Title:       "Choose Search Target Directory for Query Candidate Sampling",
+		Directory:   true,
+		DefaultPath: a.lastBrowsedDir,
+	})
+	if err == nil && len(paths) > 0 {
+		a.setSearchDir(paths[0])
+		return paths[0], nil
+	}
+	updateFn := func() {
+		a.searchStatus = "Please select a search target directory first."
+	}
+	if a.win != nil {
+		a.win.Update(updateFn)
+	} else {
+		updateFn()
+	}
+	return "", fmt.Errorf("no search target directory configured")
+}
+
+func (a *DesktopApp) refreshSampledCandidates(force bool) ([]string, error) {
+	a.samplingMu.Lock()
+	defer a.samplingMu.Unlock()
+
+	dir := expandPath(strings.TrimSpace(a.searchDir))
+	if dir == "" {
+		return nil, fmt.Errorf("no search target directory configured")
+	}
+
+	if !force && len(a.sampledCandidates) > 0 && a.sampledDir == dir && a.sampledRecursive == a.searchRecursive {
+		return a.sampledCandidates, nil
+	}
+
+	candidates, err := search.DiscoverCandidatePaths(dir, a.searchRecursive)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(candidates)
+	a.sampledCandidates = candidates
+	a.sampledDir = dir
+	a.sampledRecursive = a.searchRecursive
+
+	// Synchronize sampledIndex with current queryPath
+	foundIdx := -1
+	if a.queryPath != "" {
+		for idx, cand := range candidates {
+			if cand == a.queryPath {
+				foundIdx = idx
+				break
+			}
+		}
+	}
+	a.sampledIndex = foundIdx
+	return candidates, nil
+}
+
+func (a *DesktopApp) pickRandomCandidate() {
+	if _, err := a.ensureSearchDir(); err != nil {
+		return
+	}
+
+	candidates, err := a.refreshSampledCandidates(false)
+	if err != nil || len(candidates) == 0 {
+		updateFn := func() {
+			if err != nil {
+				a.searchStatus = fmt.Sprintf("Error discovering images: %v", err)
+			} else {
+				a.searchStatus = "No supported images found in target directory."
+			}
+		}
+		if a.win != nil {
+			a.win.Update(updateFn)
+		} else {
+			updateFn()
+		}
+		return
+	}
+
+	a.samplingMu.Lock()
+	total := len(candidates)
+	currentIdx := a.sampledIndex
+	if currentIdx < 0 && a.queryPath != "" {
+		for idx, cand := range candidates {
+			if cand == a.queryPath {
+				currentIdx = idx
+				break
+			}
+		}
+	}
+
+	var newIdx int
+	if total == 1 || currentIdx < 0 || currentIdx >= total {
+		newIdx = rand.IntN(total)
+	} else {
+		offset := rand.IntN(total - 1)
+		if offset >= currentIdx {
+			newIdx = offset + 1
+		} else {
+			newIdx = offset
+		}
+	}
+	a.samplingMu.Unlock()
+
+	a.setSampledCandidate(newIdx, 1)
+}
+
+func (a *DesktopApp) stepSampledCandidate(delta int) {
+	if _, err := a.ensureSearchDir(); err != nil {
+		return
+	}
+	candidates, err := a.refreshSampledCandidates(false)
+	if err != nil || len(candidates) == 0 {
+		return
+	}
+	a.samplingMu.Lock()
+	total := len(candidates)
+	var newIdx int
+	if a.sampledIndex >= 0 {
+		newIdx = (a.sampledIndex + delta%total + total) % total
+	} else if delta < 0 {
+		newIdx = total - 1
+	} else {
+		newIdx = 0
+	}
+	a.samplingMu.Unlock()
+
+	a.setSampledCandidate(newIdx, delta)
+}
+
+func (a *DesktopApp) pickNextCandidate() {
+	a.stepSampledCandidate(1)
+}
+
+func (a *DesktopApp) pickPrevCandidate() {
+	a.stepSampledCandidate(-1)
+}
+
+func (a *DesktopApp) setSampledCandidate(startIdx int, stepDir int) {
+	a.samplingMu.Lock()
+	total := len(a.sampledCandidates)
+	if total == 0 {
+		a.samplingMu.Unlock()
+		return
+	}
+	if stepDir == 0 {
+		stepDir = 1
+	}
+
+	idx := (startIdx%total + total) % total
+	var validPath string
+	for attempts := 0; attempts < total; attempts++ {
+		path := a.sampledCandidates[idx]
+		if _, err := os.Stat(path); err == nil {
+			validPath = path
+			a.sampledIndex = idx
+			break
+		}
+		idx = (idx + stepDir + total) % total
+	}
+	a.samplingMu.Unlock()
+
+	if validPath != "" {
+		a.setQueryImage(validPath)
+	} else {
+		_, _ = a.refreshSampledCandidates(true)
 	}
 }
 
