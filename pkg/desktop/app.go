@@ -463,9 +463,6 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 		// Control Strip Card
 		ui.Column(c).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(10).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(16).Children(func() {
-				ui.Text(c, "Metric:").Bold().FontSize(12).TextColor(t.Text)
-				ui.Select(c, &a.searchMetric, []string{"phash", "pdq", "wavelet", "dhash", "palette"})
-
 				ui.Text(c, fmt.Sprintf("Cutoff: %.0f%%", a.searchThreshold)).Bold().FontSize(12).TextColor(t.Text)
 				ui.Slider(c, &a.searchThreshold, 50.0, 100.0).Width(130)
 
@@ -475,6 +472,9 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 				ui.Checkbox(c, &a.searchRecursive, "Recursive")
 
 				ui.Row(c).Grow(1) // Spacer
+
+				ui.Text(c, "Metric:").Bold().FontSize(12).TextColor(t.Text)
+				ui.Select(c, &a.searchMetric, []string{"phash", "pdq", "wavelet", "dhash", "palette"})
 
 				// Search Action Button
 				btn := ui.PrimaryButton(c, "Start Visual Search")
