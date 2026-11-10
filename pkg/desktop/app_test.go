@@ -547,3 +547,50 @@ func TestFullViewOptionButtonsInVisualSearch(t *testing.T) {
 		t.Errorf("Expected List View to contain 'Full View' button, got: %v", testerList.Texts())
 	}
 }
+
+func TestKeyboardShortcutsNavigation(t *testing.T) {
+	tmpDir := t.TempDir()
+	pA := createTestPNG(t, tmpDir, "a.png", 255, 0, 0)
+	pB := createTestPNG(t, tmpDir, "b.png", 0, 255, 0)
+	pC := createTestPNG(t, tmpDir, "c.png", 0, 0, 255)
+
+	app := NewDesktopApp()
+	app.searchDir = tmpDir
+
+	// Start in Full View with first candidate
+	app.setQueryImage(pA)
+	app.openFullView(pA)
+
+	tester := ui.NewTester(app.view, 1000, 750)
+
+	// Press 'n' -> Next candidate
+	tester.Key(0, ui.KeyN)
+	if app.fullViewPath != pB {
+		t.Errorf("After KeyN: expected fullViewPath == %s, got %s", pB, app.fullViewPath)
+	}
+
+	// Press 'n' -> Next candidate
+	tester.Key(0, ui.KeyN)
+	if app.fullViewPath != pC {
+		t.Errorf("After second KeyN: expected fullViewPath == %s, got %s", pC, app.fullViewPath)
+	}
+
+	// Press 'p' -> Previous candidate
+	tester.Key(0, ui.KeyP)
+	if app.fullViewPath != pB {
+		t.Errorf("After KeyP: expected fullViewPath == %s, got %s", pB, app.fullViewPath)
+	}
+
+	// Press 'r' -> Random candidate (distinct from current)
+	curPath := app.fullViewPath
+	tester.Key(0, ui.KeyR)
+	if app.fullViewPath == curPath {
+		t.Errorf("After KeyR: expected different image, but remained %s", curPath)
+	}
+
+	// Press Escape in Full View -> Back to Visual Search
+	tester.Key(0, ui.KeyEscape)
+	if app.activeTab != 0 {
+		t.Errorf("After KeyEscape: expected activeTab == 0, got %d", app.activeTab)
+	}
+}

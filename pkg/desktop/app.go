@@ -237,7 +237,44 @@ func (a *DesktopApp) getScoreBadgeStyle(score float32, isDark bool) BadgeStyle {
 	}
 }
 
+func (a *DesktopApp) handleKeyShortcuts(c *ui.Context) {
+	if c.FocusTakesText() {
+		return
+	}
+
+	keyR := c.Shortcut(0, ui.KeyR) || c.Shortcut(ui.Shift, ui.KeyR)
+	keyN := c.Shortcut(0, ui.KeyN) || c.Shortcut(ui.Shift, ui.KeyN)
+	keyP := c.Shortcut(0, ui.KeyP) || c.Shortcut(ui.Shift, ui.KeyP)
+	keyEsc := c.Shortcut(0, ui.KeyEscape)
+
+	if keyEsc && a.activeTab == 4 {
+		a.activeTab = 0
+		return
+	}
+
+	if keyR {
+		if a.activeTab == 4 {
+			a.fullViewPickRandom()
+		} else if a.activeTab == 0 {
+			a.pickRandomCandidate()
+		}
+	} else if keyN {
+		if a.activeTab == 4 {
+			a.fullViewPickNext()
+		} else if a.activeTab == 0 {
+			a.pickNextCandidate()
+		}
+	} else if keyP {
+		if a.activeTab == 4 {
+			a.fullViewPickPrev()
+		} else if a.activeTab == 0 {
+			a.pickPrevCandidate()
+		}
+	}
+}
+
 func (a *DesktopApp) view(c *ui.Context) {
+	a.handleKeyShortcuts(c)
 	t := a.getTheme()
 	c.SetTheme(t)
 	c.Root().Background(t.Background)
@@ -289,20 +326,22 @@ func (a *DesktopApp) view(c *ui.Context) {
 			})
 
 			// Active Tab Content
-			ui.Scroll(c).Grow(1).Padding(2).Children(func() {
-				switch a.activeTab {
-				case 0:
-					a.viewSearchTab(c)
-				case 1:
-					a.viewComparisonTab(c)
-				case 2:
-					a.viewClustersTab(c)
-				case 3:
-					a.viewCacheTab(c)
-				case 4:
-					a.viewFullViewTab(c)
-				}
-			})
+			if a.activeTab == 4 {
+				a.viewFullViewTab(c)
+			} else {
+				ui.Scroll(c).Grow(1).Padding(2).Children(func() {
+					switch a.activeTab {
+					case 0:
+						a.viewSearchTab(c)
+					case 1:
+						a.viewComparisonTab(c)
+					case 2:
+						a.viewClustersTab(c)
+					case 3:
+						a.viewCacheTab(c)
+					}
+				})
+			}
 
 			// Persistent Footer Status Bar
 			ui.Row(c).PaddingX(12).PaddingY(6).Radius(6).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
@@ -408,13 +447,13 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 							if ui.Button(c, "⛶").Height(24).Tooltip("Full View").Clicked() {
 								a.openFullView(a.queryPath)
 							}
-							if ui.Button(c, "🎲").Height(24).Tooltip("Another random").Clicked() {
+							if ui.Button(c, "🎲").Height(24).Tooltip("Another random (R)").Clicked() {
 								go a.pickRandomCandidate()
 							}
-							if ui.Button(c, "⏮").Height(24).Tooltip("Prev").Clicked() {
+							if ui.Button(c, "⏮").Height(24).Tooltip("Prev (P)").Clicked() {
 								go a.pickPrevCandidate()
 							}
-							if ui.Button(c, "⏭").Height(24).Tooltip("Next").Clicked() {
+							if ui.Button(c, "⏭").Height(24).Tooltip("Next (N)").Clicked() {
 								go a.pickNextCandidate()
 							}
 							if ui.Button(c, "📂").Height(24).Tooltip("Show infolder").Clicked() {
@@ -441,7 +480,7 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 
 					// Empty state sampling action
 					ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-						if ui.Button(c, "🎲").Height(24).Tooltip("Another random").Clicked() {
+						if ui.Button(c, "🎲").Height(24).Tooltip("Another random (R)").Clicked() {
 							go a.pickRandomCandidate()
 						}
 						ui.Text(c, "Pick random image from search target directory").FontSize(11).TextColor(t.TextMuted)
@@ -764,7 +803,7 @@ func (a *DesktopApp) viewComparisonTab(c *ui.Context) {
 func (a *DesktopApp) viewFullViewTab(c *ui.Context) {
 	t := c.Theme()
 
-	ui.Column(c).Fill().Gap(14).Children(func() {
+	ui.Column(c).Grow(1).Fill().Gap(10).Children(func() {
 		if a.fullViewPath == "" {
 			ui.Column(c).Padding(32).Radius(8).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
 				ui.Text(c, "No image selected for Full View.").Bold().FontSize(14).TextColor(t.Text)
@@ -793,6 +832,13 @@ func (a *DesktopApp) viewFullViewTab(c *ui.Context) {
 					headerTitle = "Reference Query Image"
 				}
 				ui.Text(c, headerTitle).FontSize(16).Bold().TextColor(t.Text)
+
+				ui.Text(c, "•").FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, filepath.Base(a.fullViewPath)).Bold().FontSize(13).TextColor(t.Text)
+				if a.fullViewMeta != "" {
+					ui.Text(c, "•").FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, a.fullViewMeta).FontSize(11).TextColor(t.TextMuted)
+				}
 			})
 
 			if ui.Button(c, "← Back to Visual Search").Clicked() {
@@ -800,50 +846,39 @@ func (a *DesktopApp) viewFullViewTab(c *ui.Context) {
 			}
 		})
 
-		// Full View Image Card
-		ui.Column(c).Grow(1).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12).Children(func() {
-			// Large Image Viewport
-			ui.Row(c).Height(460).Radius(6).Background(t.Background).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-				if a.fullViewThumb != nil {
-					ui.Image(c, a.fullViewThumb).Fit(ui.Contain).MaxHeight(450)
-				} else {
-					ui.Text(c, "Loading preview...").FontSize(12).TextColor(t.TextMuted)
+		// Full View Image Display Container (expands to fit the window)
+		imgBox := ui.Row(c).Grow(1).Fill().MinHeight(300).Radius(8).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.Center)
+		isHovered := imgBox.Hovered()
+		imgBox.Children(func() {
+			if a.fullViewThumb != nil {
+				ui.Image(c, a.fullViewThumb).Fit(ui.Contain).Fill()
+			} else {
+				ui.Text(c, "Loading preview...").FontSize(12).TextColor(t.TextMuted)
+			}
+
+			// Floating overlay toolbar showing only when the mouse hovers on the image
+			toolbar := ui.Row(c).Attach(ui.AnchorBottom, ui.AnchorBottom).Bottom(24).PaddingX(14).PaddingY(8).Radius(24).Background(ui.Hex("#0b0f19e6")).Border(1, ui.Hex("#ffffff25")).AlignItems(ui.Center).Gap(10)
+			if !isHovered {
+				toolbar.Opacity(0).IgnoreInput(true)
+			}
+			toolbar.Children(func() {
+				if ui.Button(c, "🎲").Height(28).Tooltip("Another random (R)").Clicked() {
+					go a.fullViewPickRandom()
 				}
-			})
+				if ui.Button(c, "⏮").Height(28).Tooltip("Prev (P)").Clicked() {
+					go a.fullViewPickPrev()
+				}
+				if ui.Button(c, "⏭").Height(28).Tooltip("Next (N)").Clicked() {
+					go a.fullViewPickNext()
+				}
+				if ui.Button(c, "📂").Height(28).Tooltip("Show infolder").Clicked() {
+					a.showInFileFinder(a.fullViewPath)
+				}
 
-			// File name and metadata row
-			ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-				ui.Column(c).Gap(2).Children(func() {
-					ui.Text(c, filepath.Base(a.fullViewPath)).Bold().FontSize(13).TextColor(t.Text)
-					if a.fullViewMeta != "" {
-						ui.Text(c, a.fullViewMeta).FontSize(12).TextColor(t.TextMuted)
-					}
-					ui.Text(c, a.fullViewPath).FontSize(10).TextColor(t.TextMuted)
-				})
-			})
-
-			// Same 3 buttons below the image (icon-only with tooltips)
-			ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-				ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-					if ui.Button(c, "🎲").Height(26).Tooltip("Another random").Clicked() {
-						go a.fullViewPickRandom()
-					}
-					if ui.Button(c, "⏮").Height(26).Tooltip("Prev").Clicked() {
-						go a.fullViewPickPrev()
-					}
-					if ui.Button(c, "⏭").Height(26).Tooltip("Next").Clicked() {
-						go a.fullViewPickNext()
-					}
-					if ui.Button(c, "📂").Height(26).Tooltip("Show infolder").Clicked() {
-						a.showInFileFinder(a.fullViewPath)
-					}
-				})
-
-				// Position indicator counter
 				if a.fullViewContext == "results" && a.searchReport != nil && a.fullViewMatchIdx >= 0 && a.fullViewMatchIdx < len(a.searchReport.Matches) {
-					ui.Text(c, fmt.Sprintf("Match %d of %d", a.fullViewMatchIdx+1, len(a.searchReport.Matches))).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, fmt.Sprintf("Match %d of %d", a.fullViewMatchIdx+1, len(a.searchReport.Matches))).FontSize(11).TextColor(ui.Hex("#f1f5f9"))
 				} else if a.sampledIndex >= 0 && len(a.sampledCandidates) > 0 {
-					ui.Text(c, fmt.Sprintf("Candidate %d of %d", a.sampledIndex+1, len(a.sampledCandidates))).FontSize(11).TextColor(t.TextMuted)
+					ui.Text(c, fmt.Sprintf("Candidate %d of %d", a.sampledIndex+1, len(a.sampledCandidates))).FontSize(11).TextColor(ui.Hex("#f1f5f9"))
 				}
 			})
 		})
