@@ -75,6 +75,13 @@ type DesktopApp struct {
 	compareQueryMeta  string
 	compareMatchMeta  string
 
+	// Full View tab state
+	fullViewPath     string
+	fullViewThumb    ui.ImageSource
+	fullViewMeta     string
+	fullViewContext  string
+	fullViewMatchIdx int
+
 	// Cluster tab state
 	clusterDir       string
 	clusterMetric    string
@@ -258,7 +265,7 @@ func (a *DesktopApp) view(c *ui.Context) {
 				ui.Row(c).Grow(1) // Spacer
 
 				// Navigation Tabs
-				ui.Tabs(c, &a.activeTab, "Visual Search", "Comparison View", "Duplicate Clusters", "Fingerprint Cache")
+				ui.Tabs(c, &a.activeTab, "Visual Search", "Comparison View", "Duplicate Clusters", "Fingerprint Cache", "Full View")
 
 				// Theme Switcher Button
 				themeBtnLabel := "☀️ Light"
@@ -292,6 +299,8 @@ func (a *DesktopApp) view(c *ui.Context) {
 					a.viewClustersTab(c)
 				case 3:
 					a.viewCacheTab(c)
+				case 4:
+					a.viewFullViewTab(c)
 				}
 			})
 
@@ -361,6 +370,9 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 							ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 								ui.Text(c, filepath.Base(a.queryPath)).Bold().FontSize(13).TextColor(t.Text)
 								ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+									if ui.Button(c, "⛶").Height(22).Tooltip("Full View").Clicked() {
+										a.openFullView(a.queryPath)
+									}
 									if ui.Button(c, "📂").Height(22).Tooltip("Show in Finder").Clicked() {
 										a.showInFileFinder(a.queryPath)
 									}
@@ -393,6 +405,9 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 					// Query Candidate Sampling Toolbar
 					ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 						ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+							if ui.Button(c, "⛶").Height(24).Tooltip("Full View").Clicked() {
+								a.openFullView(a.queryPath)
+							}
 							if ui.Button(c, "🎲").Height(24).Tooltip("Another random").Clicked() {
 								go a.pickRandomCandidate()
 							}
@@ -610,6 +625,9 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 
 								// Actions row: single row with icons and hover tooltips
 								ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+									if ui.Button(c, "⛶").Grow(1).Tooltip("Full View").Clicked() {
+										a.openFullView(m.Path)
+									}
 									if ui.Button(c, "👁").Grow(1).Tooltip("Compare").Clicked() {
 										a.openComparison(m.Path, m.SimilarityScore.String(), m.SimilarityScore.AsPercent(), m.Width, m.Height, m.FileSize)
 									}
@@ -645,6 +663,9 @@ func (a *DesktopApp) viewSearchTab(c *ui.Context) {
 							ui.Text(c, filepath.Base(m.Path)).Bold().TextColor(t.Text).Width(160)
 							ui.Text(c, m.Path).FontSize(11).TextColor(t.TextMuted).Grow(1)
 
+							if ui.Button(c, "⛶ Full View").Tooltip("Full View").Clicked() {
+								a.openFullView(m.Path)
+							}
 							if ui.Button(c, "👁 Compare").Tooltip("Compare").Clicked() {
 								a.openComparison(m.Path, m.SimilarityScore.String(), m.SimilarityScore.AsPercent(), m.Width, m.Height, m.FileSize)
 							}
@@ -735,6 +756,95 @@ func (a *DesktopApp) viewComparisonTab(c *ui.Context) {
 				ui.Text(c, filepath.Base(a.compareMatchPath)).Bold().FontSize(13).TextColor(t.Text)
 				ui.Text(c, a.compareMatchMeta).FontSize(12).TextColor(t.TextMuted)
 				ui.Text(c, a.compareMatchPath).FontSize(10).TextColor(t.TextMuted)
+			})
+		})
+	})
+}
+
+func (a *DesktopApp) viewFullViewTab(c *ui.Context) {
+	t := c.Theme()
+
+	ui.Column(c).Fill().Gap(14).Children(func() {
+		if a.fullViewPath == "" {
+			ui.Column(c).Padding(32).Radius(8).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
+				ui.Text(c, "No image selected for Full View.").Bold().FontSize(14).TextColor(t.Text)
+				ui.Text(c, "Click '⛶' on the reference query image or any search result candidate to open it here.").FontSize(12).TextColor(t.TextMuted)
+				if a.queryPath != "" {
+					if ui.Button(c, "Open Reference Query Image").Clicked() {
+						a.openFullView(a.queryPath)
+					}
+				}
+			})
+			return
+		}
+
+		// Full View Header
+		ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(10).Children(func() {
+				headerTitle := "Full View"
+				if a.fullViewContext == "results" && a.fullViewMatchIdx >= 0 && a.searchReport != nil && a.fullViewMatchIdx < len(a.searchReport.Matches) {
+					match := a.searchReport.Matches[a.fullViewMatchIdx]
+					headerTitle = fmt.Sprintf("Candidate Match #%d", a.fullViewMatchIdx+1)
+					bStyle := a.getScoreBadgeStyle(match.SimilarityScore.AsPercent(), t.Dark)
+					ui.Row(c).PaddingX(8).PaddingY(2).Radius(4).Background(bStyle.Bg).Border(1, bStyle.Border).Children(func() {
+						ui.Text(c, fmt.Sprintf("%s Match", match.SimilarityScore.String())).Bold().FontSize(12).TextColor(bStyle.Text)
+					})
+				} else if a.fullViewPath == a.queryPath {
+					headerTitle = "Reference Query Image"
+				}
+				ui.Text(c, headerTitle).FontSize(16).Bold().TextColor(t.Text)
+			})
+
+			if ui.Button(c, "← Back to Visual Search").Clicked() {
+				a.activeTab = 0
+			}
+		})
+
+		// Full View Image Card
+		ui.Column(c).Grow(1).Padding(14).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(12).Children(func() {
+			// Large Image Viewport
+			ui.Row(c).Height(460).Radius(6).Background(t.Background).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+				if a.fullViewThumb != nil {
+					ui.Image(c, a.fullViewThumb).Fit(ui.Contain).MaxHeight(450)
+				} else {
+					ui.Text(c, "Loading preview...").FontSize(12).TextColor(t.TextMuted)
+				}
+			})
+
+			// File name and metadata row
+			ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+				ui.Column(c).Gap(2).Children(func() {
+					ui.Text(c, filepath.Base(a.fullViewPath)).Bold().FontSize(13).TextColor(t.Text)
+					if a.fullViewMeta != "" {
+						ui.Text(c, a.fullViewMeta).FontSize(12).TextColor(t.TextMuted)
+					}
+					ui.Text(c, a.fullViewPath).FontSize(10).TextColor(t.TextMuted)
+				})
+			})
+
+			// Same 3 buttons below the image (icon-only with tooltips)
+			ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+				ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+					if ui.Button(c, "🎲").Height(26).Tooltip("Another random").Clicked() {
+						go a.fullViewPickRandom()
+					}
+					if ui.Button(c, "⏮").Height(26).Tooltip("Prev").Clicked() {
+						go a.fullViewPickPrev()
+					}
+					if ui.Button(c, "⏭").Height(26).Tooltip("Next").Clicked() {
+						go a.fullViewPickNext()
+					}
+					if ui.Button(c, "📂").Height(26).Tooltip("Show infolder").Clicked() {
+						a.showInFileFinder(a.fullViewPath)
+					}
+				})
+
+				// Position indicator counter
+				if a.fullViewContext == "results" && a.searchReport != nil && a.fullViewMatchIdx >= 0 && a.fullViewMatchIdx < len(a.searchReport.Matches) {
+					ui.Text(c, fmt.Sprintf("Match %d of %d", a.fullViewMatchIdx+1, len(a.searchReport.Matches))).FontSize(11).TextColor(t.TextMuted)
+				} else if a.sampledIndex >= 0 && len(a.sampledCandidates) > 0 {
+					ui.Text(c, fmt.Sprintf("Candidate %d of %d", a.sampledIndex+1, len(a.sampledCandidates))).FontSize(11).TextColor(t.TextMuted)
+				}
 			})
 		})
 	})
@@ -1664,6 +1774,100 @@ func (a *DesktopApp) openComparison(matchPath, score string, scoreVal float32, w
 			a.compareMatchMeta = fmt.Sprintf("%dx%d | %s", w, h, formatBytes(size))
 			a.activeTab = 1 // Switch to Comparison tab
 		})
+	}
+}
+
+func (a *DesktopApp) openFullView(path string) {
+	img, meta, err := search.OpenImage(path)
+	if err != nil {
+		return
+	}
+	bitmap := ui.NewBitmap(img)
+
+	contextType := "query"
+	matchIdx := -1
+	if a.searchReport != nil {
+		for i, m := range a.searchReport.Matches {
+			if m.Path == path {
+				contextType = "results"
+				matchIdx = i
+				break
+			}
+		}
+	}
+
+	updateFn := func() {
+		a.fullViewPath = path
+		a.fullViewThumb = bitmap
+		a.fullViewMeta = fmt.Sprintf("%d × %d • %s • %s", meta.Width, meta.Height, strings.ToUpper(meta.Format), formatBytes(meta.FileSize))
+		a.fullViewContext = contextType
+		a.fullViewMatchIdx = matchIdx
+		a.activeTab = 4
+	}
+	if a.win != nil {
+		a.win.Update(updateFn)
+	} else {
+		updateFn()
+	}
+}
+
+func (a *DesktopApp) fullViewPickRandom() {
+	if a.fullViewContext == "results" && a.searchReport != nil && len(a.searchReport.Matches) > 1 {
+		total := len(a.searchReport.Matches)
+		var newIdx int
+		if total == 1 || a.fullViewMatchIdx < 0 || a.fullViewMatchIdx >= total {
+			newIdx = rand.IntN(total)
+		} else {
+			offset := rand.IntN(total - 1)
+			if offset >= a.fullViewMatchIdx {
+				newIdx = offset + 1
+			} else {
+				newIdx = offset
+			}
+		}
+		a.openFullView(a.searchReport.Matches[newIdx].Path)
+		return
+	}
+
+	a.pickRandomCandidate()
+	if a.queryPath != "" {
+		a.openFullView(a.queryPath)
+	}
+}
+
+func (a *DesktopApp) fullViewPickNext() {
+	if a.fullViewContext == "results" && a.searchReport != nil && len(a.searchReport.Matches) > 0 {
+		total := len(a.searchReport.Matches)
+		newIdx := 0
+		if a.fullViewMatchIdx >= 0 {
+			newIdx = (a.fullViewMatchIdx + 1) % total
+		}
+		a.openFullView(a.searchReport.Matches[newIdx].Path)
+		return
+	}
+
+	a.pickNextCandidate()
+	if a.queryPath != "" {
+		a.openFullView(a.queryPath)
+	}
+}
+
+func (a *DesktopApp) fullViewPickPrev() {
+	if a.fullViewContext == "results" && a.searchReport != nil && len(a.searchReport.Matches) > 0 {
+		total := len(a.searchReport.Matches)
+		newIdx := 0
+		if a.fullViewMatchIdx >= 0 {
+			newIdx = (a.fullViewMatchIdx - 1 + total) % total
+		} else {
+			newIdx = total - 1
+		}
+		a.openFullView(a.searchReport.Matches[newIdx].Path)
+		return
+	}
+
+	a.pickPrevCandidate()
+	if a.queryPath != "" {
+		a.openFullView(a.queryPath)
 	}
 }
 

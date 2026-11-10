@@ -407,3 +407,143 @@ func TestQueryCandidateSamplingEmptyDir(t *testing.T) {
 		t.Errorf("Expected UI to display '🎲' button when empty, got: %v", tester.Texts())
 	}
 }
+
+func TestOpenFullViewFromQueryImage(t *testing.T) {
+	tmpDir := t.TempDir()
+	pA := createTestPNG(t, tmpDir, "query_test.png", 100, 150, 200)
+
+	app := NewDesktopApp()
+	app.setQueryImage(pA)
+
+	// Open query image in Full View
+	app.openFullView(pA)
+
+	if app.activeTab != 4 {
+		t.Errorf("Expected activeTab == 4 (Full View), got %d", app.activeTab)
+	}
+	if app.fullViewPath != pA {
+		t.Errorf("Expected fullViewPath == %s, got %s", pA, app.fullViewPath)
+	}
+	if app.fullViewThumb == nil {
+		t.Errorf("Expected fullViewThumb to be initialized")
+	}
+
+	// Verify UI rendering of Full View
+	tester := ui.NewTester(app.view, 1000, 750)
+	if !tester.HasText("Full View") && !tester.HasText("Reference Query Image") {
+		t.Errorf("Expected header in Full View tab, got: %v", tester.Texts())
+	}
+	if !tester.HasText("🎲") || !tester.HasText("⏭") || !tester.HasText("⏮") || !tester.HasText("📂") {
+		t.Errorf("Expected navigation buttons below image in Full View, got: %v", tester.Texts())
+	}
+	if !tester.HasText("Back to Visual Search") {
+		t.Errorf("Expected 'Back to Visual Search' button")
+	}
+}
+
+func TestOpenFullViewFromResultMatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	pQ := createTestPNG(t, tmpDir, "q.png", 10, 20, 30)
+	pM1 := createTestPNG(t, tmpDir, "m1.png", 12, 22, 32)
+	pM2 := createTestPNG(t, tmpDir, "m2.png", 14, 24, 34)
+
+	app := NewDesktopApp()
+	app.queryPath = pQ
+	app.searchReport = &search.SearchReport{
+		QueryPath:    pQ,
+		Metric:       string(engine.MetricPHash),
+		TotalScanned: 2,
+		Matches: []search.MatchResult{
+			{
+				Path:            pM1,
+				SimilarityScore: engine.NewSimilarityScore(96.0),
+				Width:           8,
+				Height:          8,
+				FileSize:        100,
+			},
+			{
+				Path:            pM2,
+				SimilarityScore: engine.NewSimilarityScore(91.0),
+				Width:           8,
+				Height:          8,
+				FileSize:        120,
+			},
+		},
+	}
+
+	// Open first match
+	app.openFullView(pM1)
+	if app.activeTab != 4 {
+		t.Errorf("Expected activeTab == 4, got %d", app.activeTab)
+	}
+	if app.fullViewPath != pM1 {
+		t.Errorf("Expected fullViewPath == %s, got %s", pM1, app.fullViewPath)
+	}
+	if app.fullViewContext != "results" {
+		t.Errorf("Expected fullViewContext == 'results', got %s", app.fullViewContext)
+	}
+	if app.fullViewMatchIdx != 0 {
+		t.Errorf("Expected fullViewMatchIdx == 0, got %d", app.fullViewMatchIdx)
+	}
+
+	// Test Next in Full View
+	app.fullViewPickNext()
+	if app.fullViewPath != pM2 || app.fullViewMatchIdx != 1 {
+		t.Errorf("Expected next match pM2 (idx 1), got path %s (idx %d)", app.fullViewPath, app.fullViewMatchIdx)
+	}
+
+	// Wrap around Next
+	app.fullViewPickNext()
+	if app.fullViewPath != pM1 || app.fullViewMatchIdx != 0 {
+		t.Errorf("Expected wrap-around to pM1 (idx 0), got path %s (idx %d)", app.fullViewPath, app.fullViewMatchIdx)
+	}
+
+	// Test Prev in Full View
+	app.fullViewPickPrev()
+	if app.fullViewPath != pM2 || app.fullViewMatchIdx != 1 {
+		t.Errorf("Expected prev match pM2 (idx 1), got path %s (idx %d)", app.fullViewPath, app.fullViewMatchIdx)
+	}
+
+	// Test UI rendering
+	tester := ui.NewTester(app.view, 1000, 750)
+	if !tester.HasText("Match 2 of 2") {
+		t.Errorf("Expected counter 'Match 2 of 2' in Full View, got: %v", tester.Texts())
+	}
+}
+
+func TestFullViewOptionButtonsInVisualSearch(t *testing.T) {
+	tmpDir := t.TempDir()
+	pQ := createTestPNG(t, tmpDir, "q.png", 10, 20, 30)
+	pM := createTestPNG(t, tmpDir, "m.png", 10, 20, 30)
+
+	app := NewDesktopApp()
+	app.setQueryImage(pQ)
+	app.searchReport = &search.SearchReport{
+		QueryPath:    pQ,
+		Metric:       string(engine.MetricPHash),
+		TotalScanned: 1,
+		Matches: []search.MatchResult{
+			{
+				Path:            pM,
+				SimilarityScore: engine.NewSimilarityScore(99.0),
+				Width:           8,
+				Height:          8,
+				FileSize:        100,
+			},
+		},
+	}
+
+	// Grid View: Query card and match card both have ⛶
+	app.searchViewMode = "grid"
+	testerGrid := ui.NewTester(app.view, 1000, 750)
+	if !testerGrid.HasText("⛶") {
+		t.Errorf("Expected Grid View to contain '⛶' Full View button, got: %v", testerGrid.Texts())
+	}
+
+	// List View: has Full View button
+	app.searchViewMode = "list"
+	testerList := ui.NewTester(app.view, 1000, 750)
+	if !testerList.HasText("Full View") {
+		t.Errorf("Expected List View to contain 'Full View' button, got: %v", testerList.Texts())
+	}
+}
