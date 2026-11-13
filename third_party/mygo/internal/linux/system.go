@@ -98,6 +98,46 @@ func pixbufFromPNG(png []byte) (ptr, error) {
 	return gObjectRef(pix), nil
 }
 
+func iconPixbufList(png []byte) (ptr, []ptr, error) {
+	if len(png) == 0 {
+		return 0, nil, errors.New("mygo: empty image")
+	}
+	basePix, err := pixbufFromPNG(png)
+	if err != nil {
+		return 0, nil, err
+	}
+	var (
+		list     ptr
+		pixs     []ptr
+		stdSizes = []int32{16, 24, 32, 48, 64, 128}
+	)
+	if gListAppend != nil && gdkPixbufScaleSimple != nil {
+		for _, sz := range stdSizes {
+			scaled := gdkPixbufScaleSimple(basePix, sz, sz, 2) // GDK_INTERP_BILINEAR = 2
+			if scaled != 0 {
+				list = gListAppend(list, scaled)
+				pixs = append(pixs, scaled)
+			}
+		}
+	}
+	if list == 0 {
+		w := gdkPixbufGetWidth(basePix)
+		h := gdkPixbufGetHeight(basePix)
+		if w <= 128 && h <= 128 {
+			if gListAppend != nil {
+				list = gListAppend(0, basePix)
+				pixs = append(pixs, basePix)
+				return list, pixs, nil
+			}
+		}
+		// If list is still 0, keep basePix in pixs for single-icon fallback
+		pixs = append(pixs, basePix)
+		return 0, pixs, nil
+	}
+	gObjectUnref(basePix)
+	return list, pixs, nil
+}
+
 func pngFromPixbuf(pix ptr) []byte {
 	var buf ptr
 	var size uintptr

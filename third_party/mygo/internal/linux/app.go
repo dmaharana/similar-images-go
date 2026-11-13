@@ -112,6 +112,14 @@ func (b *Backend) Init(h platform.AppHandler, opts platform.AppOptions) error {
 	if err := load(); err != nil {
 		return err
 	}
+	if b.name != "" {
+		if gSetPrgname != nil {
+			gSetPrgname(cs(b.name))
+		}
+		if gSetApplicationName != nil {
+			gSetApplicationName(cs(b.name))
+		}
+	}
 	if disableDMABUF(opts.DMABUFRenderer, os.Getenv, "/") {
 		_ = os.Setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
 	}
@@ -304,12 +312,26 @@ func (a appController) CancelBounce(int) {
 func (a appController) SetDockMenu(*platform.Menu) {}
 
 func (a appController) SetDockIcon(png []byte) error {
-	pix, err := pixbufFromPNG(png)
+	if png == nil {
+		return nil
+	}
+	list, pixs, err := iconPixbufList(png)
 	if err != nil {
 		return err
 	}
-	defer gObjectUnref(pix)
-	gtkWindowSetDefaultIcon(pix)
+	if list != 0 && gtkWindowSetDefaultIconList != nil {
+		gtkWindowSetDefaultIconList(list)
+		gListFree(list)
+		for _, p := range pixs {
+			gObjectUnref(p)
+		}
+	} else if len(pixs) > 0 {
+		gtkWindowSetDefaultIcon(pixs[0])
+		gObjectUnref(pixs[0])
+	}
+	if a.b != nil && a.b.name != "" && gtkWindowSetDefaultIconName != nil {
+		gtkWindowSetDefaultIconName(cs(a.b.name))
+	}
 	return nil
 }
 

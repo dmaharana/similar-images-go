@@ -1,12 +1,17 @@
 package desktop
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
 	"image"
+	"image/png"
 	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,12 +20,19 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"golang.org/x/image/draw"
 
 	"similar-images/pkg/cache"
 	"similar-images/pkg/cluster"
 	"similar-images/pkg/engine"
 	"similar-images/pkg/search"
 )
+
+//go:embed assets/icon.png
+var appIconPNG []byte
+
+//go:embed assets/icon_512.png
+var appIcon512PNG []byte
 
 // DesktopApp manages the state and views of the Mygo GPU desktop application.
 type DesktopApp struct {
@@ -65,6 +77,8 @@ type DesktopApp struct {
 	resultThumbs  map[string]ui.ImageSource
 	clusterThumbs map[string]ui.ImageSource
 	thumbMu       sync.RWMutex
+	loadingThumbs map[string]bool
+	loadingMu     sync.Mutex
 
 	// Comparison tab state
 	compareQueryThumb ui.ImageSource
@@ -81,6 +95,7 @@ type DesktopApp struct {
 	fullViewMeta     string
 	fullViewContext  string
 	fullViewMatchIdx int
+	fullViewPrevTab  int
 
 	// Cluster tab state
 	clusterDir       string
@@ -91,6 +106,8 @@ type DesktopApp struct {
 	clusterRunning   bool
 	clusterStatus    string
 	clusterReport    *cluster.ClusterReport
+	clusterPage      int
+	clusterPageSize  int
 
 	// Cache tab state
 	cacheStatsText string
@@ -122,20 +139,105 @@ func NewDesktopApp() *DesktopApp {
 		searchViewMode:   "grid",
 		resultThumbs:     make(map[string]ui.ImageSource),
 		clusterThumbs:    make(map[string]ui.ImageSource),
+		loadingThumbs:    make(map[string]bool),
 		clusterMetric:    "phash",
 		clusterThreshold: 80.0,
 		clusterHeuristic: "resolution",
 		clusterRecursive: true,
+		clusterPage:      0,
+		clusterPageSize:  10,
 		sampledIndex:     -1,
 	}
 }
 
+func scalePNG(srcBytes []byte, size int) []byte {
+	srcImg, err := png.Decode(bytes.NewReader(srcBytes))
+	if err != nil {
+		return srcBytes
+	}
+	if srcImg.Bounds().Dx() == size && srcImg.Bounds().Dy() == size {
+		return srcBytes
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, size, size))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return srcBytes
+	}
+	return buf.Bytes()
+}
+
+func ensureDesktopIntegration() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return
+	}
+
+	masterBytes := appIcon512PNG
+	if len(masterBytes) == 0 {
+		masterBytes = appIconPNG
+	}
+	if len(masterBytes) == 0 {
+		return
+	}
+
+	sizes := []int{16, 24, 32, 48, 64, 128, 256, 512}
+	for _, sz := range sizes {
+		iconDir := filepath.Join(home, ".local", "share", "icons", "hicolor", fmt.Sprintf("%dx%d", sz, sz), "apps")
+		_ = os.MkdirAll(iconDir, 0755)
+		iconPath := filepath.Join(iconDir, "similar-images.png")
+		scaled := scalePNG(masterBytes, sz)
+		_ = os.WriteFile(iconPath, scaled, 0644)
+	}
+
+	// Also install into ~/.local/share/pixmaps as standard un-cached fallback
+	pixmapsDir := filepath.Join(home, ".local", "share", "pixmaps")
+	_ = os.MkdirAll(pixmapsDir, 0755)
+	_ = os.WriteFile(filepath.Join(pixmapsDir, "similar-images.png"), masterBytes, 0644)
+
+	appsDir := filepath.Join(home, ".local", "share", "applications")
+	_ = os.MkdirAll(appsDir, 0755)
+	desktopFilePath := filepath.Join(appsDir, "similar-images.desktop")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = "similar-images"
+	}
+
+	desktopContent := fmt.Sprintf(`[Desktop Entry]
+Type=Application
+Name=Similar Images
+Comment=Visual Perceptual Similarity & Duplicate Finder
+Exec=%s desktop
+Icon=similar-images
+Terminal=false
+Categories=Graphics;Utility;
+StartupWMClass=similar-images
+`, execPath)
+
+	_ = os.WriteFile(desktopFilePath, []byte(desktopContent), 0644)
+
+	// Refresh system icon and desktop databases if utilities exist
+	go func() {
+		hicolorDir := filepath.Join(home, ".local", "share", "icons", "hicolor")
+		_ = exec.Command("gtk-update-icon-cache", "-q", "-t", "-f", hicolorDir).Run()
+		_ = exec.Command("update-desktop-database", appsDir).Run()
+	}()
+}
+
 // Launch starts the desktop application window.
 func Launch() error {
+	ensureDesktopIntegration()
 	appState := NewDesktopApp()
 
 	mygo.App.SetName("similar-images")
 	mygo.App.WhenReady(func() {
+		if len(appIconPNG) > 0 {
+			_ = mygo.App.Dock.SetIcon(appIconPNG)
+		}
 		appState.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:           "similar-images - Visual Perceptual Similarity & Duplicate Finder",
 			Width:           1150,
@@ -145,6 +247,9 @@ func Launch() error {
 			BackgroundColor: "#0f1117",
 			Content:         ui.View(appState.view),
 		})
+		if len(appIconPNG) > 0 {
+			_ = appState.win.SetIcon(appIconPNG)
+		}
 		appState.win.OnFileDrop(func(e *mygo.FileDropEvent) {
 			if len(e.Paths) > 0 {
 				appState.handleFileDrop(e.Paths[0])
@@ -248,7 +353,7 @@ func (a *DesktopApp) handleKeyShortcuts(c *ui.Context) {
 	keyEsc := c.Shortcut(0, ui.KeyEscape)
 
 	if keyEsc && a.activeTab == 4 {
-		a.activeTab = 0
+		a.activeTab = a.fullViewPrevTab
 		return
 	}
 
@@ -828,6 +933,8 @@ func (a *DesktopApp) viewFullViewTab(c *ui.Context) {
 					ui.Row(c).PaddingX(8).PaddingY(2).Radius(4).Background(bStyle.Bg).Border(1, bStyle.Border).Children(func() {
 						ui.Text(c, fmt.Sprintf("%s Match", match.SimilarityScore.String())).Bold().FontSize(12).TextColor(bStyle.Text)
 					})
+				} else if a.fullViewContext == "cluster" {
+					headerTitle = "Duplicate Cluster Image"
 				} else if a.fullViewPath == a.queryPath {
 					headerTitle = "Reference Query Image"
 				}
@@ -841,8 +948,12 @@ func (a *DesktopApp) viewFullViewTab(c *ui.Context) {
 				}
 			})
 
-			if ui.Button(c, "← Back to Visual Search").Clicked() {
-				a.activeTab = 0
+			backBtnText := "← Back to Visual Search"
+			if a.fullViewPrevTab == 2 {
+				backBtnText = "← Back to Duplicate Clusters"
+			}
+			if ui.Button(c, backBtnText).Clicked() {
+				a.activeTab = a.fullViewPrevTab
 			}
 		})
 
@@ -877,6 +988,18 @@ func (a *DesktopApp) viewFullViewTab(c *ui.Context) {
 
 				if a.fullViewContext == "results" && a.searchReport != nil && a.fullViewMatchIdx >= 0 && a.fullViewMatchIdx < len(a.searchReport.Matches) {
 					ui.Text(c, fmt.Sprintf("Match %d of %d", a.fullViewMatchIdx+1, len(a.searchReport.Matches))).FontSize(11).TextColor(ui.Hex("#f1f5f9"))
+				} else if a.fullViewContext == "cluster" {
+					cands := a.clusterCandidates()
+					curIdx := -1
+					for i, p := range cands {
+						if p == a.fullViewPath {
+							curIdx = i
+							break
+						}
+					}
+					if curIdx >= 0 && len(cands) > 0 {
+						ui.Text(c, fmt.Sprintf("Cluster Image %d of %d", curIdx+1, len(cands))).FontSize(11).TextColor(ui.Hex("#f1f5f9"))
+					}
 				} else if a.sampledIndex >= 0 && len(a.sampledCandidates) > 0 {
 					ui.Text(c, fmt.Sprintf("Candidate %d of %d", a.sampledIndex+1, len(a.sampledCandidates))).FontSize(11).TextColor(ui.Hex("#f1f5f9"))
 				}
@@ -979,20 +1102,66 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 		// Clusters Output
 		if a.clusterReport != nil {
 			rep := a.clusterReport
+			totalClusters := len(rep.Clusters)
 
-			ui.Row(c).Padding(10).Radius(6).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-				summaryStr := fmt.Sprintf("Scanned %d images. Found %d duplicate cluster(s) with %d redundant copy(ies) in %dms",
-					rep.TotalScanned, rep.ClusterCount, rep.DuplicateCount, rep.DurationMs)
-				ui.Text(c, summaryStr).Bold().FontSize(13).TextColor(t.Text)
-			})
-
-			if rep.ClusterCount == 0 {
+			if totalClusters == 0 {
+				ui.Row(c).Padding(10).Radius(6).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+					summaryStr := fmt.Sprintf("Scanned %d images. Found 0 duplicate clusters in %dms",
+						rep.TotalScanned, rep.DurationMs)
+					ui.Text(c, summaryStr).Bold().FontSize(13).TextColor(t.Text)
+				})
 				ui.Column(c).Padding(32).Radius(8).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
 					ui.Text(c, "✓ No Duplicate Clusters Detected").Bold().FontSize(14).TextColor(ui.Hex("#16a34a"))
 					ui.Text(c, "All scanned images appear visually distinct at the chosen threshold.").FontSize(12).TextColor(t.TextMuted)
 				})
 			} else {
-				for _, cl := range rep.Clusters {
+				pageSize := a.clusterPageSize
+				if pageSize <= 0 {
+					pageSize = 10
+				}
+				totalPages := (totalClusters + pageSize - 1) / pageSize
+				if a.clusterPage < 0 {
+					a.clusterPage = 0
+				}
+				if a.clusterPage >= totalPages {
+					a.clusterPage = totalPages - 1
+				}
+				startIdx := a.clusterPage * pageSize
+				endIdx := startIdx + pageSize
+				if endIdx > totalClusters {
+					endIdx = totalClusters
+				}
+				visibleClusters := rep.Clusters[startIdx:endIdx]
+
+				ui.Row(c).Padding(10).Radius(6).Background(t.Surface).Border(1, t.Border).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+					summaryStr := fmt.Sprintf("Scanned %d images. Found %d duplicate cluster(s) with %d redundant copy(ies) in %dms",
+						rep.TotalScanned, rep.ClusterCount, rep.DuplicateCount, rep.DurationMs)
+					ui.Text(c, summaryStr).Bold().FontSize(13).TextColor(t.Text)
+
+					if totalPages > 1 {
+						ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+							prevBtn := ui.Button(c, "◀ Prev")
+							if a.clusterPage == 0 {
+								prevBtn.Disabled(true)
+							} else if prevBtn.Clicked() {
+								a.clusterPage--
+								a.loadVisibleClusterThumbs()
+							}
+
+							ui.Text(c, fmt.Sprintf("Page %d of %d (%d-%d of %d)", a.clusterPage+1, totalPages, startIdx+1, endIdx, totalClusters)).FontSize(12).Bold().TextColor(t.Text)
+
+							nextBtn := ui.Button(c, "Next ▶")
+							if a.clusterPage >= totalPages-1 {
+								nextBtn.Disabled(true)
+							} else if nextBtn.Clicked() {
+								a.clusterPage++
+								a.loadVisibleClusterThumbs()
+							}
+						})
+					}
+				})
+
+				for _, cl := range visibleClusters {
 					clusterItem := cl
 					ui.Column(c).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Gap(10).Children(func() {
 						ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
@@ -1012,6 +1181,9 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 								a.thumbMu.RLock()
 								cThumb := a.clusterThumbs[clusterItem.Canonical.Path]
 								a.thumbMu.RUnlock()
+								if cThumb == nil {
+									a.requestClusterThumb(clusterItem.Canonical.Path)
+								}
 
 								ui.Row(c).Width(230).Height(130).Radius(8, 8, 0, 0).Background(t.Surface).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 									if cThumb != nil {
@@ -1025,9 +1197,14 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 										ui.Row(c).PaddingX(4).PaddingY(1).Radius(3).Background(ui.Hex("#dcfce7")).Children(func() {
 											ui.Text(c, "KEEP (ORIGINAL)").Bold().FontSize(10).TextColor(ui.Hex("#166534"))
 										})
-										if ui.Button(c, "📂").Tooltip("Show in Finder").Clicked() {
-											a.showInFileFinder(clusterItem.Canonical.Path)
-										}
+										ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+											if ui.Button(c, "⛶").Tooltip("Full View").Clicked() {
+												a.openFullView(clusterItem.Canonical.Path)
+											}
+											if ui.Button(c, "📂").Tooltip("Show in Finder").Clicked() {
+												a.showInFileFinder(clusterItem.Canonical.Path)
+											}
+										})
 									})
 									ui.Text(c, filepath.Base(clusterItem.Canonical.Path)).Bold().FontSize(11).TextColor(t.Text)
 									dimStr := fmt.Sprintf("%dx%d • %s", clusterItem.Canonical.Width, clusterItem.Canonical.Height, formatBytes(clusterItem.Canonical.FileSize))
@@ -1038,11 +1215,17 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 
 							// Duplicate Image Cards
 							for _, dup := range clusterItem.Duplicates {
+								if dup.Path == clusterItem.Canonical.Path {
+									continue
+								}
 								dupItem := dup
 								ui.Column(c).Width(230).Radius(8).Background(t.Background).Border(1, ui.Hex("#dc2626")).Children(func() {
 									a.thumbMu.RLock()
 									dThumb := a.clusterThumbs[dupItem.Path]
 									a.thumbMu.RUnlock()
+									if dThumb == nil {
+										a.requestClusterThumb(dupItem.Path)
+									}
 
 									ui.Row(c).Width(230).Height(130).Radius(8, 8, 0, 0).Background(t.Surface).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 										if dThumb != nil {
@@ -1057,6 +1240,9 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 												ui.Text(c, "DUPLICATE").Bold().FontSize(10).TextColor(ui.Hex("#991b1b"))
 											})
 											ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+												if ui.Button(c, "⛶").Tooltip("Full View").Clicked() {
+													a.openFullView(dupItem.Path)
+												}
 												if ui.Button(c, "📂").Tooltip("Show in Finder").Clicked() {
 													a.showInFileFinder(dupItem.Path)
 												}
@@ -1074,6 +1260,28 @@ func (a *DesktopApp) viewClustersTab(c *ui.Context) {
 								})
 							}
 						})
+					})
+				}
+
+				if totalPages > 1 {
+					ui.Row(c).Padding(8).Justify(ui.Center).AlignItems(ui.Center).Gap(10).Children(func() {
+						prevBtn := ui.Button(c, "◀ Previous Page")
+						if a.clusterPage == 0 {
+							prevBtn.Disabled(true)
+						} else if prevBtn.Clicked() {
+							a.clusterPage--
+							a.loadVisibleClusterThumbs()
+						}
+
+						ui.Text(c, fmt.Sprintf("Page %d of %d", a.clusterPage+1, totalPages)).FontSize(12).Bold().TextColor(t.Text)
+
+						nextBtn := ui.Button(c, "Next Page ▶")
+						if a.clusterPage >= totalPages-1 {
+							nextBtn.Disabled(true)
+						} else if nextBtn.Clicked() {
+							a.clusterPage++
+							a.loadVisibleClusterThumbs()
+						}
 					})
 				}
 			}
@@ -1661,37 +1869,107 @@ func (a *DesktopApp) executeClusters() {
 	a.clusterThumbs = make(map[string]ui.ImageSource)
 	a.thumbMu.Unlock()
 
+	a.clusterReport = rep
+	a.clusterPage = 0
+
 	if a.win != nil {
 		a.win.Update(func() {
 			a.clusterRunning = false
 			if err != nil {
 				a.clusterStatus = fmt.Sprintf("Clustering error: %v", err)
 			} else {
-				a.clusterReport = rep
 				a.clusterStatus = fmt.Sprintf("Found %d clusters (%d duplicates).", rep.ClusterCount, rep.DuplicateCount)
 			}
 		})
+	} else {
+		a.clusterRunning = false
+		if err != nil {
+			a.clusterStatus = fmt.Sprintf("Clustering error: %v", err)
+		} else {
+			a.clusterStatus = fmt.Sprintf("Found %d clusters (%d duplicates).", rep.ClusterCount, rep.DuplicateCount)
+		}
 	}
 
-	// Preload cluster thumbnails in background
+	// Preload thumbnails for visible clusters only
 	if rep != nil && len(rep.Clusters) > 0 {
-		go func(clusters []cluster.Cluster) {
-			for _, cl := range clusters {
-				for _, cand := range cl.AllCandidates {
-					img, _, err := search.OpenImage(cand.Path)
-					if err == nil {
-						thumbImg := search.CreateThumbnail(img, 240)
-						bm := ui.NewBitmap(thumbImg)
-						a.thumbMu.Lock()
-						a.clusterThumbs[cand.Path] = bm
-						a.thumbMu.Unlock()
-						if a.win != nil {
-							a.win.Update(func() {})
-						}
-					}
-				}
-			}
-		}(rep.Clusters)
+		a.loadVisibleClusterThumbs()
+	}
+}
+
+func (a *DesktopApp) requestClusterThumb(path string) {
+	if path == "" {
+		return
+	}
+	a.thumbMu.RLock()
+	_, exists := a.clusterThumbs[path]
+	a.thumbMu.RUnlock()
+	if exists {
+		return
+	}
+
+	a.loadingMu.Lock()
+	if a.loadingThumbs == nil {
+		a.loadingThumbs = make(map[string]bool)
+	}
+	if a.loadingThumbs[path] {
+		a.loadingMu.Unlock()
+		return
+	}
+	a.loadingThumbs[path] = true
+	a.loadingMu.Unlock()
+
+	go func(p string) {
+		defer func() {
+			a.loadingMu.Lock()
+			delete(a.loadingThumbs, p)
+			a.loadingMu.Unlock()
+		}()
+
+		img, _, err := search.OpenImage(p)
+		if err != nil {
+			return
+		}
+		thumbImg := search.CreateThumbnail(img, 240)
+		bm := ui.NewBitmap(thumbImg)
+
+		a.thumbMu.Lock()
+		a.clusterThumbs[p] = bm
+		a.thumbMu.Unlock()
+
+		if a.win != nil {
+			a.win.Update(func() {})
+		}
+	}(path)
+}
+
+func (a *DesktopApp) loadVisibleClusterThumbs() {
+	if a.clusterReport == nil || len(a.clusterReport.Clusters) == 0 {
+		return
+	}
+	totalClusters := len(a.clusterReport.Clusters)
+	pageSize := a.clusterPageSize
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	totalPages := (totalClusters + pageSize - 1) / pageSize
+	if a.clusterPage < 0 {
+		a.clusterPage = 0
+	}
+	if a.clusterPage >= totalPages {
+		a.clusterPage = totalPages - 1
+	}
+	startIdx := a.clusterPage * pageSize
+	endIdx := startIdx + pageSize
+	if endIdx > totalClusters {
+		endIdx = totalClusters
+	}
+	visible := a.clusterReport.Clusters[startIdx:endIdx]
+
+	for _, cl := range visible {
+		a.requestClusterThumb(cl.Canonical.Path)
+		for _, dup := range cl.Duplicates {
+			a.requestClusterThumb(dup.Path)
+		}
 	}
 }
 
@@ -1830,6 +2108,14 @@ func (a *DesktopApp) openFullView(path string) {
 			}
 		}
 	}
+	if a.activeTab == 2 {
+		contextType = "cluster"
+	}
+
+	prevTab := a.activeTab
+	if a.activeTab == 4 {
+		prevTab = a.fullViewPrevTab
+	}
 
 	updateFn := func() {
 		a.fullViewPath = path
@@ -1837,6 +2123,7 @@ func (a *DesktopApp) openFullView(path string) {
 		a.fullViewMeta = fmt.Sprintf("%d × %d • %s • %s", meta.Width, meta.Height, strings.ToUpper(meta.Format), formatBytes(meta.FileSize))
 		a.fullViewContext = contextType
 		a.fullViewMatchIdx = matchIdx
+		a.fullViewPrevTab = prevTab
 		a.activeTab = 4
 	}
 	if a.win != nil {
@@ -1846,7 +2133,46 @@ func (a *DesktopApp) openFullView(path string) {
 	}
 }
 
+func (a *DesktopApp) clusterCandidates() []string {
+	if a.clusterReport == nil {
+		return nil
+	}
+	var paths []string
+	for _, cl := range a.clusterReport.Clusters {
+		for _, cand := range cl.AllCandidates {
+			paths = append(paths, cand.Path)
+		}
+	}
+	return paths
+}
+
 func (a *DesktopApp) fullViewPickRandom() {
+	if a.fullViewContext == "cluster" {
+		candidates := a.clusterCandidates()
+		if len(candidates) > 1 {
+			var newIdx int
+			curIdx := -1
+			for i, p := range candidates {
+				if p == a.fullViewPath {
+					curIdx = i
+					break
+				}
+			}
+			if curIdx >= 0 {
+				offset := rand.IntN(len(candidates) - 1)
+				if offset >= curIdx {
+					newIdx = offset + 1
+				} else {
+					newIdx = offset
+				}
+			} else {
+				newIdx = rand.IntN(len(candidates))
+			}
+			a.openFullView(candidates[newIdx])
+			return
+		}
+	}
+
 	if a.fullViewContext == "results" && a.searchReport != nil && len(a.searchReport.Matches) > 1 {
 		total := len(a.searchReport.Matches)
 		var newIdx int
@@ -1871,6 +2197,22 @@ func (a *DesktopApp) fullViewPickRandom() {
 }
 
 func (a *DesktopApp) fullViewPickNext() {
+	if a.fullViewContext == "cluster" {
+		candidates := a.clusterCandidates()
+		if len(candidates) > 0 {
+			curIdx := -1
+			for i, p := range candidates {
+				if p == a.fullViewPath {
+					curIdx = i
+					break
+				}
+			}
+			nextIdx := (curIdx + 1) % len(candidates)
+			a.openFullView(candidates[nextIdx])
+			return
+		}
+	}
+
 	if a.fullViewContext == "results" && a.searchReport != nil && len(a.searchReport.Matches) > 0 {
 		total := len(a.searchReport.Matches)
 		newIdx := 0
@@ -1888,6 +2230,22 @@ func (a *DesktopApp) fullViewPickNext() {
 }
 
 func (a *DesktopApp) fullViewPickPrev() {
+	if a.fullViewContext == "cluster" {
+		candidates := a.clusterCandidates()
+		if len(candidates) > 0 {
+			curIdx := 0
+			for i, p := range candidates {
+				if p == a.fullViewPath {
+					curIdx = i
+					break
+				}
+			}
+			prevIdx := (curIdx - 1 + len(candidates)) % len(candidates)
+			a.openFullView(candidates[prevIdx])
+			return
+		}
+	}
+
 	if a.fullViewContext == "results" && a.searchReport != nil && len(a.searchReport.Matches) > 0 {
 		total := len(a.searchReport.Matches)
 		newIdx := 0

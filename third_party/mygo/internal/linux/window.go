@@ -190,6 +190,9 @@ func (b *Backend) NewWindow(o *platform.WindowOptions, h platform.WindowHandler)
 	}
 	w.win = gtkWindowNew(typ)
 	gtkWindowSetTitle(w.win, cs(o.Title))
+	if b.name != "" && gtkWindowSetIconName != nil {
+		gtkWindowSetIconName(w.win, cs(b.name))
+	}
 	if o.Panel {
 		w.initLayer() // before anything realizes the window
 	}
@@ -818,12 +821,23 @@ func (w *window) SetIcon(png []byte) error {
 		gtkWindowSetIcon(w.win, 0) // back to the default icon
 		return nil
 	}
-	pix, err := pixbufFromPNG(png)
+	list, pixs, err := iconPixbufList(png)
 	if err != nil {
 		return err
 	}
-	defer gObjectUnref(pix)
-	gtkWindowSetIcon(w.win, pix)
+	if list != 0 && gtkWindowSetIconList != nil {
+		gtkWindowSetIconList(w.win, list)
+		gListFree(list)
+		for _, p := range pixs {
+			gObjectUnref(p)
+		}
+	} else if len(pixs) > 0 {
+		gtkWindowSetIcon(w.win, pixs[0])
+		gObjectUnref(pixs[0])
+	}
+	if w.b != nil && w.b.name != "" && gtkWindowSetIconName != nil {
+		gtkWindowSetIconName(w.win, cs(w.b.name))
+	}
 	return nil
 }
 

@@ -244,9 +244,11 @@ func FindDuplicateClusters(
 		_ = c.PutBatch(newEntries)
 	}
 
-	// Filter out failed candidates
+	// Filter out failed candidates and deduplicate
+	seenValid := make(map[string]bool)
 	for _, cand := range candidates {
-		if cand.Fingerprint != nil {
+		if cand.Fingerprint != nil && !seenValid[cand.Path] {
+			seenValid[cand.Path] = true
 			validCandidates = append(validCandidates, cand)
 		}
 	}
@@ -309,7 +311,7 @@ func FindDuplicateClusters(
 		groups[root] = append(groups[root], validCandidates[i])
 	}
 
-	// Step 4: Build cluster report (only groups with >= 2 candidates)
+	// Step 4: Build cluster report (only groups with >= 2 distinct candidates)
 	clusterID := 1
 	var totalDuplicates int
 	for _, group := range groups {
@@ -320,20 +322,37 @@ func FindDuplicateClusters(
 		canonicalIdx := PickCanonical(group, heuristic)
 		canonical := group[canonicalIdx]
 
+		seenPaths := make(map[string]bool)
+		seenPaths[canonical.Path] = true
+
 		var duplicates []Candidate
+		var distinctCandidates []Candidate
+		distinctCandidates = append(distinctCandidates, canonical)
+
 		for idx, cand := range group {
-			if idx != canonicalIdx {
-				duplicates = append(duplicates, cand)
+			if idx == canonicalIdx {
+				continue
 			}
+			if cand.Path == canonical.Path || seenPaths[cand.Path] {
+				continue
+			}
+			seenPaths[cand.Path] = true
+			duplicates = append(duplicates, cand)
+			distinctCandidates = append(distinctCandidates, cand)
+		}
+
+		// Only include cluster if there is at least one distinct duplicate candidate
+		if len(duplicates) == 0 {
+			continue
 		}
 
 		totalDuplicates += len(duplicates)
 		report.Clusters = append(report.Clusters, Cluster{
 			ID:             clusterID,
-			CanonicalIndex: canonicalIdx,
+			CanonicalIndex: 0,
 			Canonical:      canonical,
 			Duplicates:     duplicates,
-			AllCandidates:  group,
+			AllCandidates:  distinctCandidates,
 		})
 		clusterID++
 	}

@@ -166,3 +166,47 @@ func TestMoveToTrash(t *testing.T) {
 		t.Errorf("file should not exist at original location after trash")
 	}
 }
+
+func TestFindDuplicateClusters_NoSameImageDuplicates(t *testing.T) {
+	tempDir := t.TempDir()
+
+	img1 := filepath.Join(tempDir, "img1.png")
+	createPatternPNG(img1, 64, 64, "horizontal")
+
+	// Create a symlink to img1
+	symlink := filepath.Join(tempDir, "img1_symlink.png")
+	if err := os.Symlink(img1, symlink); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	inMemCache, _ := cache.OpenInMemory()
+	defer inMemCache.Close()
+
+	report, err := FindDuplicateClusters(
+		context.Background(),
+		tempDir,
+		engine.MetricPHash,
+		80.0,
+		HeuristicHighestResolution,
+		false,
+		inMemCache,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("FindDuplicateClusters failed: %v", err)
+	}
+
+	// Because img1 and img1_symlink point to the exact same file,
+	// there should be 0 duplicate clusters (no fake duplicate of the same image).
+	if report.ClusterCount != 0 {
+		t.Errorf("expected 0 duplicate clusters when only 1 physical image exists with symlink, got %d", report.ClusterCount)
+		for _, cl := range report.Clusters {
+			t.Logf("Cluster: Canonical=%s, Duplicates=%+v", cl.Canonical.Path, cl.Duplicates)
+			for _, dup := range cl.Duplicates {
+				if dup.Path == cl.Canonical.Path {
+					t.Errorf("found duplicate identical to canonical: %s", dup.Path)
+				}
+			}
+		}
+	}
+}

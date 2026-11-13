@@ -135,6 +135,9 @@ var (
 	gObjectGetPtr                  func(obj ptr, name *byte, out unsafe.Pointer, end ptr)
 	gSlistFree                     func(list ptr)
 	gListFree                      func(list ptr)
+	gListAppend                         func(list, data ptr) ptr
+	gSetPrgname                         func(prgname *byte)
+	gSetApplicationName                 func(appname *byte)
 	gUnixInputStreamNew            func(fd int32, closeFD bool) ptr
 	gInputStreamReadAll            func(stream ptr, buf unsafe.Pointer, count uintptr, read *uintptr, cancellable ptr, err *ptr) bool
 	gAppInfoLaunchDefaultForURI    func(uri *byte, ctx ptr, err *ptr) bool
@@ -283,6 +286,10 @@ var (
 	gtkWindowUnstick                    func(w ptr)
 	gtkWindowSetIcon                    func(w, pixbuf ptr)
 	gtkWindowSetDefaultIcon             func(pixbuf ptr)
+	gtkWindowSetIconList                func(w, list ptr)
+	gtkWindowSetDefaultIconList         func(list ptr)
+	gtkWindowSetIconName                func(w ptr, name *byte)
+	gtkWindowSetDefaultIconName         func(name *byte)
 	gtkWidgetShowAll                    func(w ptr)
 	gtkWidgetSetDirection               func(w ptr, dir int32)
 	gtkWidgetSetDefaultDirection        func(dir int32)
@@ -596,6 +603,9 @@ func load() error {
 	mustBind(g, &gMainLoopUnref, "g_main_loop_unref")
 	mustBind(g, &gSlistFree, "g_slist_free")
 	mustBind(g, &gListFree, "g_list_free")
+	bind(g, &gListAppend, "g_list_append")
+	bind(g, &gSetPrgname, "g_set_prgname")
+	bind(g, &gSetApplicationName, "g_set_application_name")
 	mustBind(g, &gGetApplicationName, "g_get_application_name")
 	mustBind(g, &gVariantNewString, "g_variant_new_string")
 	mustBind(g, &gVariantNewUint32, "g_variant_new_uint32")
@@ -695,6 +705,9 @@ func load() error {
 	bind(p, &gdkPixbufNewFromFileAtScale, "gdk_pixbuf_new_from_file_at_scale")
 	bind(p, &gdkPixbufGetFileInfo, "gdk_pixbuf_get_file_info")
 	bind(p, &gdkPixbufFormatGetName, "gdk_pixbuf_format_get_name")
+	bind(p, &gdkPixbufScaleSimple, "gdk_pixbuf_scale_simple")
+	bind(p, &gdkPixbufGetWidth, "gdk_pixbuf_get_width")
+	bind(p, &gdkPixbufGetHeight, "gdk_pixbuf_get_height")
 
 	t := libGTK
 	mustBind(t, &gtkInitCheck, "gtk_init_check")
@@ -740,6 +753,10 @@ func load() error {
 	mustBind(t, &gtkWindowUnstick, "gtk_window_unstick")
 	mustBind(t, &gtkWindowSetIcon, "gtk_window_set_icon")
 	mustBind(t, &gtkWindowSetDefaultIcon, "gtk_window_set_default_icon")
+	bind(t, &gtkWindowSetIconList, "gtk_window_set_icon_list")
+	bind(t, &gtkWindowSetDefaultIconList, "gtk_window_set_default_icon_list")
+	bind(t, &gtkWindowSetIconName, "gtk_window_set_icon_name")
+	bind(t, &gtkWindowSetDefaultIconName, "gtk_window_set_default_icon_name")
 	mustBind(t, &gtkWidgetShowAll, "gtk_widget_show_all")
 	mustBind(t, &gtkWidgetSetDirection, "gtk_widget_set_direction")
 	mustBind(t, &gtkWidgetSetDefaultDirection, "gtk_widget_set_default_direction")

@@ -32,6 +32,25 @@ func DiscoverCandidatePaths(dir string, recursive bool) ([]string, error) {
 	}
 
 	var candidates []string
+	seenClean := make(map[string]bool)
+	seenReal := make(map[string]bool)
+
+	addCandidate := func(p string) {
+		clean := filepath.Clean(p)
+		if seenClean[clean] {
+			return
+		}
+		seenClean[clean] = true
+
+		if realPath, err := filepath.EvalSymlinks(clean); err == nil {
+			if seenReal[realPath] {
+				return
+			}
+			seenReal[realPath] = true
+		}
+
+		candidates = append(candidates, clean)
+	}
 
 	if !recursive {
 		entries, err := os.ReadDir(absDir)
@@ -44,7 +63,7 @@ func DiscoverCandidatePaths(dir string, recursive bool) ([]string, error) {
 			}
 			path := filepath.Join(absDir, entry.Name())
 			if IsSupportedImageExtension(path) {
-				candidates = append(candidates, path)
+				addCandidate(path)
 			}
 		}
 		return candidates, nil
@@ -59,7 +78,7 @@ func DiscoverCandidatePaths(dir string, recursive bool) ([]string, error) {
 			return nil
 		}
 		if IsSupportedImageExtension(path) {
-			candidates = append(candidates, path)
+			addCandidate(path)
 		}
 		return nil
 	})
